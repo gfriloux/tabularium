@@ -53,7 +53,7 @@ record() {
 
   local out_path nar_hash sha256
   out_path=$(nix eval --raw ".#nixosConfigurations.$host.config.system.build.toplevel.outPath")
-  nar_hash=$(nix path-info --json "$out_path" | jq -r --arg p "$out_path" '.[$p].narHash')
+  nar_hash=$(nix path-info --json --json-format 2 "$out_path" | jq -r --arg p "${out_path#/nix/store/}" '.info[$p].narHash')
   sha256=$(printf '%s' "${nar_hash#sha256-}" | base64 -d | od -An -tx1 | tr -d ' \n')
 
   mkdir -p "$dir"

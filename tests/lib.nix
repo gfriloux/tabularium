@@ -10,7 +10,9 @@
         printf '/nix/store/00000000000000000000000000000000-nixos-system-%s' "$host"
         ;;
       path-info)
-        printf '{"%s":{"narHash":"sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU="}}' "$3"
+        # Mimics nix 2.34: plain --json is deprecated, format 2 keys by base name under .info.
+        [ "$2 $3 $4" = "--json --json-format 2" ] || { echo "fake nix: expected --json --json-format 2" >&2; exit 98; }
+        printf '{"info":{"%s":{"narHash":"sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU="}}}' "''${5#/nix/store/}"
         ;;
       *) echo "fake nix: unexpected $*" >&2; exit 99 ;;
     esac
