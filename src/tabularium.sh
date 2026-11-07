@@ -74,7 +74,26 @@ record() {
     }' --args "$@" >"$file"
 }
 
+last() {
+  local host="${1:-}" dir latest=""
+  [ -n "$host" ] || usage
+  dir="$(store)/deployments/$host"
+  # Timestamps in file names sort lexically.
+  if [ -d "$dir" ]; then
+    latest=$(find "$dir" -maxdepth 1 -name '*.json' | sort | tail -n 1)
+  fi
+  if [ -z "$latest" ]; then
+    echo "tabularium: no deployment recorded for $host" >&2
+    exit 1
+  fi
+  jq -r '.predicate | [.gitCommit, .deployedAt] + (if .dirty then ["dirty"] else [] end) | join(" ")' "$latest"
+}
+
 case "${1:-}" in
+  last)
+    shift
+    last "$@"
+    ;;
   record)
     shift
     record "$@"

@@ -14,3 +14,4 @@
 }
 // import ../tests/cli.nix {inherit pkgs tabularium;}
 // import ../tests/record.nix {inherit pkgs;}
+// import ../tests/last.nix {inherit pkgs;}
