@@ -72,8 +72,11 @@ record() {
   nar_hash=$(nix path-info --json --json-format 2 "$out_path" | jq -r --arg p "${out_path#/nix/store/}" '.info[$p].narHash')
   sha256=$(printf '%s' "${nar_hash#sha256-}" | base64 -d | od -An -tx1 | tr -d ' \n')
 
+  # Written aside then hard-linked: the record appears whole or not at all,
+  # and ln refuses to replace a record written meanwhile.
+  local tmp
   mkdir -p "$dir"
-  set -o noclobber
+  tmp=$(mktemp "$dir/.record.XXXXXX")
   jq -n \
     --arg path "$out_path" --arg sha256 "$sha256" \
     --arg host "$host" --arg repo "$(basename "$PWD")" --arg commit "$commit" \
@@ -87,7 +90,13 @@ record() {
         host: $host, repository: $repo, gitCommit: $commit,
         dirty: $dirty, deployedAt: $at, command: $ARGS.positional
       }
-    }' --args "$@" >"$file"
+    }' --args "$@" >"$tmp"
+  if ! ln "$tmp" "$file" 2>/dev/null; then
+    rm -f "$tmp"
+    echo "tabularium: $file already exists" >&2
+    exit 3
+  fi
+  rm -f "$tmp"
 }
 
 last() {
@@ -102,7 +111,10 @@ last() {
     echo "tabularium: no deployment recorded for $host" >&2
     exit 1
   fi
-  jq -r '.predicate | [.gitCommit, .deployedAt] + (if .dirty then ["dirty"] else [] end) | join(" ")' "$latest"
+  if ! jq -er '.predicate | [.gitCommit, .deployedAt] + (if .dirty then ["dirty"] else [] end) | join(" ")' "$latest"; then
+    echo "tabularium: $latest is not a valid record" >&2
+    exit 1
+  fi
 }
 
 case "${1:-}" in

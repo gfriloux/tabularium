@@ -21,6 +21,17 @@ in {
     grep -q 'no deployment recorded for skitarii' err
   '';
 
+  last_empty_record = mkTest "last-empty-record" ''
+    TABULARIUM_NOW=20261107T100000Z tabularium record clochette -- true
+    touch $TABULARIUM_STORE/nixos/deployments/clochette/20261107T120000Z.json
+    set +e
+    tabularium last clochette >got
+    code=$?
+    set -e
+    test "$code" -ne 0
+    test ! -s got
+  '';
+
   last_mixed_case = mkTest "last-mixed-case" ''
     tabularium record RogueLeader -- true
     tabularium last RogueLeader

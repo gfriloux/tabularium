@@ -13,11 +13,12 @@ nix, coreutils; nix is pinned by this flake, not the system's).
 | Command | Effect |
 |---|---|
 | `tabularium record <host> [--allow-dirty] -- <cmd…>` | Refuses a dirty tree (exit 2), runs `<cmd>` with the terminal attached, and on success writes an in-toto Statement v1 to `$TABULARIUM_STORE/<repo>/deployments/<host>/<YYYYMMDDTHHMMSSZ>.json` |
-| `tabularium last <host>` | `<commit> <deployedAt> [dirty]` of the newest record, exit 1 if none |
+| `tabularium last <host>` | `<commit> <deployedAt> [dirty]` of the newest record, exit 1 if none or unreadable |
 
 - Store: `${TABULARIUM_STORE:-$HOME/.tabularium}`, never committed.
 - Exit codes: wrapped command's code on failure, 2 dirty, 3 record exists, 4 tree changed during the deploy (not recorded), 64 usage.
 - Out path is evaluated **before** the deploy (unknown host fails early); HEAD + `git diff HEAD` are re-checked after it.
+- Record written to `.record.XXXXXX` then hard-linked: never partial, never overwritten (race → exit 3).
 - Dirty = `git diff --quiet HEAD` fails. Untracked files do not count (flakes ignore them).
 - Subject = toplevel store path, digest `sha256` = NAR hash in hex (`nix path-info --json --json-format 2`).
 - Predicate type: `https://github.com/gfriloux/tabularium/predicates/deployment/v0.1`.
@@ -62,9 +63,9 @@ Consumer: `gfriloux/nixos` wraps every `just install*` recipe with
 
 ## Open items, in order
 
-1. **Final whole-branch review not done yet** (executing-plans skill): review
-   `feat/lot1-deployment-record` here and `feat/tabularium-deploy-record` in
-   nixos with a fresh reviewer, Review Focus from the lot 1 plan.
+1. **Final review done** (2026-11-07): I1 (eval before deploy) and I2
+   (atomic write) fixed. nixos is ready: bump the `tabularium` lock to this
+   branch's head, then merge.
 2. **Partial activation is not recorded.** `just install` on 2026-11-07:
    `nh os switch` activated the system, `docker.service` failed (activation
    exit 4, nh exit 1), so nothing was recorded although the system switched.
@@ -74,6 +75,11 @@ Consumer: `gfriloux/nixos` wraps every `just install*` recipe with
    makes their outcome binary. Owner decision pending.
 3. GitHub default branch is `feat/lot1-deployment-record` (no `main` yet).
 4. Lot 2 (freshness) per `docs/design.md`. Rust may come with the analysers.
+5. **Polish, later** (POC first, owner 2026-11-07). Review minors:
+   `deployedAt` is the start time; `last` takes any `*.json`; store key is
+   the checkout dirname; host not validated (`--allow-dirty` as host); fake
+   `nix` ignores cwd; `design.md` still says lot 1 waits for #89; nixos
+   `nh os switch .` picks the host by hostname, not `-H`.
 
 ## Related
 

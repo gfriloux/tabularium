@@ -92,6 +92,18 @@ in {
     test "$(records)" -eq 0
   '';
 
+  record_race_same_second = mkTest "record-race-same-second" ''
+    export TABULARIUM_NOW=20261107T183000Z
+    d=$TABULARIUM_STORE/nixos/deployments/clochette
+    set +e
+    tabularium record clochette -- sh -c "mkdir -p $d && echo other > $d/20261107T183000Z.json" 2>err
+    code=$?
+    set -e
+    test "$code" -eq 3
+    test "$(cat $d/20261107T183000Z.json)" = other
+    test "$(find $d -type f | wc -l)" -eq 1
+  '';
+
   record_keeps_stdin = mkTest "record-keeps-stdin" ''
     echo secret | tabularium record clochette -- sh -c 'read x; test "$x" = secret'
   '';
