@@ -18,6 +18,12 @@ in {
     ' "$f"
   '';
 
+  record_command_with_options = mkTest "record-command-with-options" ''
+    tabularium record clochette -- true --flake .#clochette -- x
+    f=$(find $TABULARIUM_STORE/nixos/deployments/clochette -name '*.json')
+    jq -e '.predicate.command == ["true", "--flake", ".#clochette", "--", "x"]' "$f"
+  '';
+
   record_dirty_refused = mkTest "record-dirty-refused" ''
     echo changed > flake.nix
     set +e

@@ -103,7 +103,7 @@ record() {
         host: $host, repository: $repo, gitCommit: $commit,
         dirty: $dirty, deployedAt: $at, command: $ARGS.positional
       }
-    }' --args "$@")
+    }' --args -- "$@")
   printf '%s\n' "$json" | write_new "$file"
 }
 
