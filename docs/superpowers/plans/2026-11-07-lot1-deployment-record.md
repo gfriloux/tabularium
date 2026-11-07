@@ -28,10 +28,10 @@
 | CLI | `tabularium record <host> [--allow-dirty] -- <command…>` and `tabularium last <host>` |
 | Store layout | `$TABULARIUM_STORE/<repo>/deployments/<host>/<YYYYMMDDTHHMMSSZ>.json`, `<repo>` = basename of `git rev-parse --show-toplevel` |
 | Dirty definition | `git diff --quiet HEAD` fails (tracked changes, staged or not). Untracked files do **not** count: flakes ignore them |
-| Store path | `nix eval --raw .#nixosConfigurations.<host>.config.system.build.toplevel.outPath`, run after the wrapped command succeeds |
+| Store path | `nix eval --raw .#nixosConfigurations.<host>.config.system.build.toplevel.outPath`, run before the wrapped command (changed after the final review, see "Deviations") |
 | Subject digest | `sha256` = hex of the NAR hash from `nix path-info --json <path>` (SRI `sha256-…` base64 → hex) |
 | Predicate type | `https://github.com/gfriloux/tabularium/predicates/deployment/v0.1` |
-| Exit codes | wrapped command's code if it fails; `2` = dirty tree; `3` = record already exists; `64` = usage error |
+| Exit codes | wrapped command's code if it fails; `2` = dirty tree; `3` = record already exists; `4` = tree changed during the deploy; `64` = usage error |
 
 Record shape (values illustrative):
 
@@ -154,3 +154,5 @@ Record shape (values illustrative):
 
 - **Lot 1 is not blocked on #89.** The design says lot 1 depends on deploy-rs. Wrapping the deploy command keeps tabularium tool-agnostic, so it works today with `nixos-rebuild` / `nh`. When #89 lands, only the wrapped command in the Justfile changes. Planner's call; revert to "wait for #89" if the owner prefers.
 - **Bash, not Rust, for lot 1.** The design leaves Nix vs Rust open. Lot 1 is git + jq glue; Rust can come with the analysers (lot 2+). Planner's call.
+- **Out path evaluated before the deploy** (final review, I1). Evaluating after let a commit made during the deploy pair commit X with a store path built from Y, and let an unknown host fail only after a successful deploy. Now: eval first, then HEAD + `git diff HEAD` re-checked after the deploy, exit 4 if they moved.
+- **`nix path-info --json --json-format 2`** (commit 975990d): nix 2.34 deprecates plain `--json`; format 2 keys entries by base name under `.info`.

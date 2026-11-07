@@ -70,6 +70,28 @@ in {
     test "$(cat $d/20261107T183000Z.json)" = original
   '';
 
+  record_unknown_host = mkTest "record-unknown-host" ''
+    set +e
+    tabularium record rogueleader -- touch $TMPDIR/ran
+    code=$?
+    set -e
+    test "$code" -ne 0
+    test ! -e $TMPDIR/ran
+    test "$(records)" -eq 0
+  '';
+
+  record_tree_moved = mkTest "record-tree-moved" ''
+    set +e
+    tabularium record clochette -- sh -c 'echo moved > flake.nix && git commit -qam moved' 2>err
+    a=$?
+    tabularium record clochette --allow-dirty -- sh -c 'echo again > flake.nix' 2>>err
+    b=$?
+    set -e
+    test "$a" -eq 4 && test "$b" -eq 4
+    grep -q 'changed during the deploy' err
+    test "$(records)" -eq 0
+  '';
+
   record_keeps_stdin = mkTest "record-keeps-stdin" ''
     echo secret | tabularium record clochette -- sh -c 'read x; test "$x" = secret'
   '';

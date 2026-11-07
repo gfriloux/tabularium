@@ -7,6 +7,10 @@
         # nix eval --raw .#nixosConfigurations.<host>.config.system.build.toplevel.outPath
         host=''${3#.#nixosConfigurations.}
         host=''${host%%.*}
+        case "$host" in
+          clochette | RogueLeader | skitarii | exampleHost) ;;
+          *) echo "fake nix: attribute '$host' missing" >&2; exit 1 ;;
+        esac
         printf '/nix/store/00000000000000000000000000000000-nixos-system-%s' "$host"
         ;;
       path-info)

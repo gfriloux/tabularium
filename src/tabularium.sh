@@ -9,6 +9,12 @@ USAGE
   exit 64
 }
 
+# What the deploy was built from: HEAD plus any tracked change on top of it.
+tree_state() {
+  git rev-parse HEAD
+  git diff --binary HEAD | sha256sum
+}
+
 store() {
   printf '%s/%s' "${TABULARIUM_STORE:-$HOME/.tabularium}" "$(basename "$(git rev-parse --show-toplevel)")"
 }
@@ -46,13 +52,23 @@ record() {
     exit 3
   fi
 
+  # Evaluated before the deploy: an unknown host fails here, not after a
+  # successful deploy, and the out path matches the recorded commit.
+  local out_path before
+  out_path=$(nix eval --raw ".#nixosConfigurations.$host.config.system.build.toplevel.outPath")
+  before=$(tree_state)
+
   # The deploy command keeps the terminal: sudo prompts must reach the user.
   local code=0
   "$@" || code=$?
   [ "$code" -eq 0 ] || exit "$code"
 
-  local out_path nar_hash sha256
-  out_path=$(nix eval --raw ".#nixosConfigurations.$host.config.system.build.toplevel.outPath")
+  if [ "$(tree_state)" != "$before" ]; then
+    echo "tabularium: the tree changed during the deploy, $out_path cannot be tied to $commit; not recorded" >&2
+    exit 4
+  fi
+
+  local nar_hash sha256
   nar_hash=$(nix path-info --json --json-format 2 "$out_path" | jq -r --arg p "${out_path#/nix/store/}" '.info[$p].narHash')
   sha256=$(printf '%s' "${nar_hash#sha256-}" | base64 -d | od -An -tx1 | tr -d ' \n')
 

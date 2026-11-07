@@ -16,7 +16,8 @@ nix, coreutils; nix is pinned by this flake, not the system's).
 | `tabularium last <host>` | `<commit> <deployedAt> [dirty]` of the newest record, exit 1 if none |
 
 - Store: `${TABULARIUM_STORE:-$HOME/.tabularium}`, never committed.
-- Exit codes: wrapped command's code on failure, 2 dirty, 3 record exists, 64 usage.
+- Exit codes: wrapped command's code on failure, 2 dirty, 3 record exists, 4 tree changed during the deploy (not recorded), 64 usage.
+- Out path is evaluated **before** the deploy (unknown host fails early); HEAD + `git diff HEAD` are re-checked after it.
 - Dirty = `git diff --quiet HEAD` fails. Untracked files do not count (flakes ignore them).
 - Subject = toplevel store path, digest `sha256` = NAR hash in hex (`nix path-info --json --json-format 2`).
 - Predicate type: `https://github.com/gfriloux/tabularium/predicates/deployment/v0.1`.
