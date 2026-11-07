@@ -5,6 +5,7 @@
     case "$1" in
       eval)
         if [ "$2" = --json ]; then
+          [ -z "''${FAKE_NIX_EVAL_FAIL:-}" ] || { echo "fake nix: eval failed" >&2; exit 1; }
           # nix eval --json <ref>#nixosConfigurations --apply builtins.attrNames
           echo '["RogueLeader","clochette","exampleHost","skitarii"]'
           exit 0

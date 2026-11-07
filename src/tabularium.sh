@@ -107,14 +107,18 @@ record() {
   printf '%s\n' "$json" | write_new "$file"
 }
 
+# Newest record of <host>, or nothing. Timestamps in file names sort lexically.
+latest_record() {
+  local dir
+  dir="$(store)/deployments/$1"
+  [ -d "$dir" ] || return 0
+  find "$dir" -maxdepth 1 -name '*.json' | sort | tail -n 1
+}
+
 last() {
-  local host="${1:-}" dir latest=""
+  local host="${1:-}" latest
   [ -n "$host" ] || usage
-  dir="$(store)/deployments/$host"
-  # Timestamps in file names sort lexically.
-  if [ -d "$dir" ]; then
-    latest=$(find "$dir" -maxdepth 1 -name '*.json' | sort | tail -n 1)
-  fi
+  latest=$(latest_record "$host")
   if [ -z "$latest" ]; then
     echo "tabularium: no deployment recorded for $host" >&2
     exit 1
@@ -134,6 +138,10 @@ gh_api() {
 
 # Lag of <to> behind <from>: commits from the API, else status from the dates alone.
 lag() {
+  if [ "$1" = "$3" ]; then
+    echo '{"status":"up-to-date","days":0,"commits":0}'
+    return
+  fi
   local days json
   days=$((($4 - $2) / 86400))
   days=${days#-}
@@ -146,11 +154,7 @@ lag() {
     return
   fi
   local status=behind
-  if [ "$1" = "$3" ]; then
-    status=up-to-date
-  elif [ "$4" -lt "$2" ]; then
-    status=ahead
-  fi
+  [ "$4" -ge "$2" ] || status=ahead
   jq -nc --arg s "$status" --argjson days "$days" '{status: $s, days: $days, commits: null}'
 }
 
@@ -216,10 +220,46 @@ freshness() {
                lastModified: $modified, release: $release, upstream: $upstream}' <<<"$inputs")
   done <<<"$list"
 
+  local hosts='{}' names host record commit deployed host_inputs dname drev dmodified dbranch key
+  local -A lags=()
+  names=$(nix eval --json "git+file://$PWD?rev=$main#nixosConfigurations" --apply builtins.attrNames |
+    jq -r '.[]') || names=""
+  while read -r host; do
+    [ -n "$host" ] || continue
+    record=$(latest_record "$host")
+    if [ -z "$record" ]; then
+      hosts=$(jq -c --arg h "$host" '.[$h] = {status: "never-recorded"}' <<<"$hosts")
+      continue
+    fi
+    commit=$(jq -r '.predicate.gitCommit // ""' "$record") || commit=""
+    deployed=""
+    [ -z "$commit" ] || deployed=$(nixpkgs_inputs "$commit")
+    host_inputs='{}'
+    while IFS=$'\t' read -r name rev modified branch; do
+      [ -n "$name" ] || continue
+      json='{"rev":null,"status":"unavailable","days":null,"commits":null}'
+      while IFS=$'\t' read -r dname drev dmodified dbranch; do
+        [ "$dname" = "$name" ] || continue
+        if [ "$dbranch" != "$branch" ]; then
+          json='{"status":"branch-changed","days":null,"commits":null}'
+        else
+          key="$drev...$rev"
+          [ -n "${lags[$key]:-}" ] || lags[$key]=$(lag "$drev" "$dmodified" "$rev" "$modified")
+          json=${lags[$key]}
+        fi
+        json=$(jq -c --arg rev "$drev" '{rev: $rev} + .' <<<"$json")
+      done <<<"$deployed"
+      host_inputs=$(jq -c --arg n "$name" --argjson lag "$json" '.[$n] = $lag' <<<"$host_inputs")
+    done <<<"$list"
+    hosts=$(jq -c --arg h "$host" --slurpfile r "$record" --argjson inputs "$host_inputs" '
+      .[$h] = ($r[0].predicate | {status: "recorded", deployedCommit: .gitCommit,
+        deployedAt: .deployedAt, dirty: .dirty, inputs: $inputs})' <<<"$hosts")
+  done <<<"$names"
+
   local statement
   statement=$(jq -n \
     --arg blob "$(git rev-parse "$main:flake.lock")" --arg repo "$(basename "$PWD")" \
-    --arg main "$main" --argjson inputs "$inputs" \
+    --arg main "$main" --argjson inputs "$inputs" --argjson hosts "$hosts" \
     --arg at "${ts:0:4}-${ts:4:2}-${ts:6:2}T${ts:9:2}:${ts:11:2}:${ts:13:2}Z" \
     '{
       "_type": "https://in-toto.io/Statement/v1",
@@ -227,24 +267,32 @@ freshness() {
       predicateType: "https://github.com/gfriloux/tabularium/predicates/freshness/v0.1",
       predicate: {
         repository: $repo, mainCommit: $main, generatedAt: $at,
-        inputs: $inputs, hosts: {}
+        inputs: $inputs, hosts: $hosts
       }
     }')
   printf '%s\n' "$statement" | write_new "$file"
 
   jq -r '
-    def lag: if .status == "unavailable" then .status
+    def lag: if .status == "unavailable" or .status == "branch-changed" then .status
       else "\(.status) \(.days // "?")d \(.commits // "?")c" end;
     # Columns padded to their widest cell.
     def table: (transpose | map(map(length) | max + 2)) as $w
       | .[] | [range(length) as $i
           | if $i == length - 1 then .[$i] else .[$i] + " " * ($w[$i] - (.[$i] | length)) end]
       | join("");
-    [["input", "branch", "release", "main→upstream"]]
-    + (.predicate.inputs | to_entries | map([.key, .value.branch // "-",
-        (.value.release | if . then "\(.releasesBehind) behind (\(.currentStable))" else "-" end),
-        (.value.upstream | lag)]))
-    | table' <<<"$statement"
+    ([["input", "branch", "release", "main→upstream"]]
+      + (.predicate.inputs | to_entries | map([.key, .value.branch // "-",
+          (.value.release | if . then "\(.releasesBehind) behind (\(.currentStable))" else "-" end),
+          (.value.upstream | lag)]))
+      | table),
+    (.predicate.hosts | select(. != {}) | "",
+      ([["host", "input", "deployed→main"]]
+        + (to_entries | map(.key as $h | .value
+            | if .status == "never-recorded" then [[$h, "-", "never recorded"]]
+              else (if .dirty then " dirty" else "" end) as $d
+                | .inputs | to_entries | map([$h, .key, (.value | lag) + $d]) end)
+          | add // [])
+        | table))' <<<"$statement"
   echo
   echo "export: $file"
 }
