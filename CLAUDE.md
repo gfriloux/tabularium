@@ -77,6 +77,11 @@ default branch, `main`.
    the checkout dirname; host not validated (`--allow-dirty` as host); fake
    `nix` ignores cwd; other flake inputs (home-manager, stc…) in freshness; `design.md` still says lot 1 waits for #89; nixos
    `nh os switch .` picks the host by hostname, not `-H`.
+   Lot 2 minors: head == locked rev still fetches the commit date;
+   compare without `per_page=1`; no test for `diverged`; `nixpkgs-unstable`
+   and `-small` branches not handled; offline `nix eval` needs inputs local.
+   Deployed ≠ booted: after a `switch` the old kernel runs until reboot,
+   and tabularium cannot tell without logging into the host.
 
 ## Related
 
