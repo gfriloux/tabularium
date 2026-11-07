@@ -189,11 +189,17 @@ freshness() {
   # Upstream heads, and the release branches among them.
   refs=$(gh_api repos/NixOS/nixpkgs/git/matching-refs/heads/nixos-) || refs='[]'
 
-  local inputs='{}' name rev modified branch head head_at json upstream
+  local releases
+  releases=$(jq -c '[.[].ref | ltrimstr("refs/heads/") | select(test("^nixos-[0-9]{2}\\.[0-9]{2}$"))] | sort' <<<"$refs") || releases='[]'
+
+  local inputs='{}' name rev modified branch head head_at json upstream release
   while IFS=$'\t' read -r name rev modified branch; do
     [ -n "$name" ] || continue
     upstream='{"rev":null,"status":"unavailable","days":null,"commits":null}'
     head=""
+    release=$(jq -c --arg b "$branch" '
+      if length > 0 and index($b) != null
+      then {currentStable: .[-1], releasesBehind: (length - 1 - index($b))} else null end' <<<"$releases")
     if [ -n "$branch" ]; then
       head=$(jq -r --arg r "refs/heads/$branch" '.[] | select(.ref == $r) | .object.sha' <<<"$refs") || head=""
     fi
@@ -205,9 +211,9 @@ freshness() {
       fi
     fi
     inputs=$(jq -c --arg n "$name" --arg branch "$branch" --arg rev "$rev" \
-      --argjson modified "$modified" --argjson upstream "$upstream" '
+      --argjson modified "$modified" --argjson upstream "$upstream" --argjson release "$release" '
       .[$n] = {branch: (if $branch == "" then null else $branch end), rev: $rev,
-               lastModified: $modified, release: null, upstream: $upstream}' <<<"$inputs")
+               lastModified: $modified, release: $release, upstream: $upstream}' <<<"$inputs")
   done <<<"$list"
 
   local statement
@@ -235,7 +241,9 @@ freshness() {
           | if $i == length - 1 then .[$i] else .[$i] + " " * ($w[$i] - (.[$i] | length)) end]
       | join("");
     [["input", "branch", "release", "main→upstream"]]
-    + (.predicate.inputs | to_entries | map([.key, .value.branch // "-", "-", (.value.upstream | lag)]))
+    + (.predicate.inputs | to_entries | map([.key, .value.branch // "-",
+        (.value.release | if . then "\(.releasesBehind) behind (\(.currentStable))" else "-" end),
+        (.value.upstream | lag)]))
     | table' <<<"$statement"
   echo
   echo "export: $file"

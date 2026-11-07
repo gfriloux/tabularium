@@ -104,4 +104,32 @@ in {
     tabularium freshness >stdout
     jq -e '.predicate.inputs | keys == ["nixpkgs"]' $export_file
   '';
+
+  freshness_old_stable = mkFresh "freshness-old-stable" ''
+    lock nixpkgs-stable ${A} 1000000 nixos-25.11
+    commit_lock
+    s() { printf '{"ref":"refs/heads/%s","object":{"sha":"%s","type":"commit"}}' "$1" "$2"; }
+    printf '[%s,%s,%s,%s,%s]' "$(s nixos-25.05 cc)" "$(s nixos-25.11 ${B})" "$(s nixos-26.05 dd)" \
+      "$(s nixos-26.05-small ee)" "$(s nixos-unstable ff)" >$gh/git/matching-refs/heads/nixos-
+    commit_date ${B} 1970-01-15T13:46:40Z
+    compare ${A}...${B} ahead 7 0
+    tabularium freshness >stdout
+    jq -e '
+      .predicate.inputs["nixpkgs-stable"]
+      | .release == {currentStable: "nixos-26.05", releasesBehind: 1}
+      and .upstream == {rev: "${B}", status: "behind", days: 3, commits: 7}
+    ' $export_file
+    grep -q '1 behind (nixos-26.05)' stdout
+  '';
+
+  freshness_current_stable = mkFresh "freshness-current-stable" ''
+    lock nixpkgs ${A} 1000000 nixos-26.05
+    commit_lock
+    s() { printf '{"ref":"refs/heads/%s","object":{"sha":"%s","type":"commit"}}' "$1" "$2"; }
+    printf '[%s,%s,%s]' "$(s nixos-25.11 cc)" "$(s nixos-26.05 ${B})" "$(s nixos-unstable ff)" \
+      >$gh/git/matching-refs/heads/nixos-
+    tabularium freshness >stdout
+    jq -e '.predicate.inputs.nixpkgs.release == {currentStable: "nixos-26.05", releasesBehind: 0}' $export_file
+    grep -q '0 behind (nixos-26.05)' stdout
+  '';
 }
