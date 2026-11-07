@@ -26,7 +26,8 @@ nix, coreutils; nix is pinned by this flake, not the system's).
 
 Consumer: `gfriloux/nixos` wraps every `just install*` recipe with
 `tabularium record <Host> --`; `tabularium` comes from the nixos devShell
-(direnv). Branch `feat/tabularium-deploy-record` there, not merged yet.
+(direnv). Merged in gfriloux/nixos#131; its input follows this repo's
+default branch, `main`.
 
 ## Tests
 
@@ -63,19 +64,8 @@ Consumer: `gfriloux/nixos` wraps every `just install*` recipe with
 
 ## Open items, in order
 
-1. **Final review done** (2026-11-07): I1 (eval before deploy) and I2
-   (atomic write) fixed. nixos is ready: bump the `tabularium` lock to this
-   branch's head, then merge.
-2. **Partial activation is not recorded.** `just install` on 2026-11-07:
-   `nh os switch` activated the system, `docker.service` failed (activation
-   exit 4, nh exit 1), so nothing was recorded although the system switched.
-   Local fix idea: after a failure, compare `/run/current-system` with the
-   evaluated out path and record `activation: partial` with the exit code.
-   Remote hosts cannot be checked without logging in; deploy-rs's rollback
-   makes their outcome binary. Owner decision pending.
-3. GitHub default branch is `feat/lot1-deployment-record` (no `main` yet).
-4. Lot 2 (freshness) per `docs/design.md`. Rust may come with the analysers.
-5. **Polish, later** (POC first, owner 2026-11-07). Review minors:
+1. Lot 2 (freshness) per `docs/design.md`. Rust may come with the analysers.
+2. **Polish, later** (POC first, owner 2026-11-07). Review minors:
    `deployedAt` is the start time; `last` takes any `*.json`; store key is
    the checkout dirname; host not validated (`--allow-dirty` as host); fake
    `nix` ignores cwd; `design.md` still says lot 1 waits for #89; nixos
