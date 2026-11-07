@@ -18,7 +18,7 @@
     pkgs = nixpkgs.legacyPackages.${system};
     tabularium = pkgs.writeShellApplication {
       name = "tabularium";
-      runtimeInputs = with pkgs; [git jq nix coreutils];
+      runtimeInputs = with pkgs; [git jq nix coreutils curl];
       text = builtins.readFile ./src/tabularium.sh;
     };
   in {
