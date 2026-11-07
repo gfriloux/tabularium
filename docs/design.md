@@ -165,9 +165,10 @@ upstream PURLs are used; OSV has no Nix ecosystem.
 Each lot is usable on its own.
 
 1. **Deployment record.** Deploy recipe refuses dirty trees and writes host +
-   commit into `.tabularium`. Depends on #89.
+   commit into `.tabularium`. Depends on #89. **Done** (2026-11-07).
 2. **First analysis: freshness.** Cheapest analysis (reads `flake.lock`), gives
-   a first drift report (deployed commit vs `main`).
+   a first drift report (deployed commit vs `main`). **Done** (2026-11-07),
+   see [spec](superpowers/specs/2026-11-07-lot2-freshness-design.md).
 3. **SBOMs.** Host closures and container images, CycloneDX.
 4. **CVE + VEX.** grype over the SBOMs, OpenVEX statements.
 5. **Compliance.** Consume stc#146 output per host.
