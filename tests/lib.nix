@@ -91,7 +91,7 @@
   '';
   # vulnxscan <path> --out <csv>: serves $FAKE_VULNX/<basename>.csv and its .log, logs the call.
   fakeVulnxscan = pkgs.writeShellScriptBin "vulnxscan" ''
-    echo "$1" >>"$TMPDIR/vulnxscan.log"
+    echo "$*" >>"$TMPDIR/vulnxscan.log"
     b=''${FAKE_VULNX:-/nonexistent}/$(basename "$1")
     [ -f "$b.csv" ] || { echo "fake vulnxscan: no fixture for $1" >&2; exit 1; }
     cp "$b.csv" "$3"

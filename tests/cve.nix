@@ -65,7 +65,7 @@ in {
     vulnx ${M}
     echo "WARNING  vulnix: database download failed" >>$FAKE_VULNX/${M}.log
     tabularium cve clochette >stdout
-    jq -e '.predicate.states.main.sources == ["grype", "osv"]' $export_file
+    jq -e '.predicate.states.main.sources == ["grype"]' $export_file
     grep -q '\[degraded: vulnix\]' stdout
   '';
 
@@ -210,5 +210,24 @@ in {
     printf '"vuln_id","package"\n"a","b","c"\n' >$FAKE_VULNX/${M}.csv
     tabularium cve clochette >stdout
     jq -e '.predicate.states.main.status == "failed"' $export_file
+  '';
+
+  # OSV receives the host's component list: off unless asked for.
+  cve_osv_off_by_default = mkCve "cve-osv-off-by-default" ''
+    ${deployedThenMain}
+    vulnx ${D}
+    vulnx ${M}
+    tabularium cve clochette >stdout
+    test "$(grep -c -- '--skip-osv' $TMPDIR/vulnxscan.log)" -eq 2
+    jq -e '.predicate.states.main.sources == ["grype", "vulnix"] and .predicate.comparisons.deploy.status == "ok"' $export_file
+  '';
+
+  cve_osv_flag = mkCve "cve-osv-flag" ''
+    ${deployedThenMain}
+    vulnx ${D}
+    vulnx ${M}
+    tabularium cve clochette --osv --no-build >stdout
+    ! grep -q -- '--skip-osv' $TMPDIR/vulnxscan.log
+    jq -e '.predicate.states.main.sources == ["grype", "osv", "vulnix"]' $export_file
   '';
 }

@@ -18,7 +18,7 @@ input).
 | `tabularium record <host> [--allow-dirty] -- <cmd…>` | Refuses a dirty tree (exit 2), runs `<cmd>` with the terminal attached, and on success writes an in-toto Statement v1 to `$TABULARIUM_STORE/<repo>/deployments/<host>/<YYYYMMDDTHHMMSSZ>.json` |
 | `tabularium last <host>` | `<commit> <deployedAt> [dirty]` of the newest record, exit 1 if none or unreadable |
 | `tabularium freshness` | No argument (64 otherwise). Prints an input table (root nixpkgs inputs of `flake.lock` on `main`: lag vs upstream, days + commits), a host table (per host: nixpkgs pinned by its last deployed commit vs `main`'s, days + commits) and `export: <path>` |
-| `tabularium cve <host> [--no-build]` | Scans 3 states with vulnxscan: `deployed` (record subject), `main`, `update` (`main` + root `nixpkgs` at upstream head). Prints `deployed → main` and `main → update`: CVEs fixed (solid/triage/patch), new, remaining, kernel apart, bumps of important packages; `export: <path>` |
+| `tabularium cve <host> [--no-build] [--osv]` | Scans 3 states with vulnxscan (OSV off unless `--osv`: it would send each host's component list to api.osv.dev): `deployed` (record subject), `main`, `update` (`main` + root `nixpkgs` at upstream head). Prints `deployed → main` and `main → update`: CVEs fixed (solid/triage/patch), new, remaining, kernel apart, bumps of important packages; `export: <path>` |
 | `tabularium sbom <host> [--build]` | bombon CycloneDX SBOM of the toplevel of the newest record, at its commit. Prints `components`/`purl`/`cpe`/`licenses` counts and `export: <path>` |
 
 - Store: `${TABULARIUM_STORE:-$HOME/.tabularium}`, never committed.

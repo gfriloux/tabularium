@@ -7,7 +7,7 @@ usage: tabularium record <host> [--allow-dirty] -- <command...>
        tabularium last <host>
        tabularium freshness
        tabularium sbom <host> [--build]
-       tabularium cve <host> [--no-build]
+       tabularium cve <host> [--no-build] [--osv]
 USAGE
   exit 64
 }
@@ -394,6 +394,7 @@ sbom() {
 
 # One state of a host, scanned: <toplevel> is a store path or an installable to
 # realise, <config> the installable of its NixOS system (or "" when unknown).
+# $TABULARIUM_OSV=true lets vulnxscan send the component list to api.osv.dev.
 # Prints a state JSON; build and scan problems become "skipped" or "failed".
 cve_state() {
   local name=$1 target=$2 config=$3 no_build=$4 n path dir code state important=null
@@ -422,7 +423,12 @@ cve_state() {
 
   dir=$(mktemp -d)
   code=0
-  vulnxscan "$path" --out "$dir/vulns.csv" >"$dir/log" 2>&1 || code=$?
+  local scan=(vulnxscan "$path" --out "$dir/vulns.csv") all='["grype", "osv", "vulnix"]'
+  if [ "${TABULARIUM_OSV:-false}" != true ]; then
+    scan+=(--skip-osv)
+    all='["grype", "vulnix"]'
+  fi
+  "${scan[@]}" >"$dir/log" 2>&1 || code=$?
   if [ "$code" -ne 0 ]; then
     rm -rf "$dir"
     jq -nc --arg p "$path" --arg r "vulnxscan exited $code" '{status: "failed", toplevel: $p, reason: $r}'
@@ -436,12 +442,11 @@ cve_state() {
   # mlr prints nothing at all for a CSV without rows.
   if ! state=$({ mlr --icsv --ojson cat "$dir/vulns.csv" && echo; } | jq -sc 'add // []' | jq -c \
     --arg p "$path" --argjson important "$important" --slurpfile patched "$dir/patched.json" \
-    --slurpfile warnings "$dir/warnings.json" '
+    --slurpfile warnings "$dir/warnings.json" --argjson all "$all" '
     [.[] | {id: .vuln_id, package: (.package | tostring), version: (.version_local | tostring),
             severity: (.severity | tostring),
             sources: [("grype", "osv", "vulnix") as $s | select(.[$s] | tostring == "1") | $s]}]
     | unique_by([.id, .package]) as $cves
-    | ["grype", "osv", "vulnix"] as $all
     | {status: "scanned", toplevel: $p,
        sources: [$all[] | . as $s | select($warnings[0] | map(ascii_downcase | contains($s)) | any | not)],
        warnings: ($warnings[0] | map(select(. as $w | $all | map(. as $s | $w | ascii_downcase | contains($s)) | any | not))),
@@ -481,11 +486,16 @@ cve() {
   local host="${1:-}" no_build=false
   [ -n "$host" ] || usage
   shift
-  if [ "${1:-}" = "--no-build" ]; then
-    no_build=true
+  # OSV is off by default: it would receive the host's component list.
+  TABULARIUM_OSV=false
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --no-build) no_build=true ;;
+      --osv) TABULARIUM_OSV=true ;;
+      *) usage ;;
+    esac
     shift
-  fi
-  [ "$#" -eq 0 ] || usage
+  done
 
   cd "$(git rev-parse --show-toplevel)"
 
