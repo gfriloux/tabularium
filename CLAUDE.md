@@ -5,24 +5,27 @@ local, uncommitted store. Read `docs/design.md` first: it is the intent, and it
 is expected to move as iterative development teaches us things. Update it
 rather than forcing the code to fit.
 
-## What exists (lots 1 and 2, 2026-11-07)
+## What exists (lots 1 to 3, 2026-11-08)
 
 `src/tabularium.sh`, packaged with `writeShellApplication` (runtime: git, jq,
-nix, coreutils; nix is pinned by this flake, not the system's).
+nix, coreutils; nix is pinned by this flake, not the system's). bombon is an input
+of this flake; `src/sbom.nix` reaches the script through `runtimeEnv`.
 
 | Command | Effect |
 |---|---|
 | `tabularium record <host> [--allow-dirty] -- <cmd…>` | Refuses a dirty tree (exit 2), runs `<cmd>` with the terminal attached, and on success writes an in-toto Statement v1 to `$TABULARIUM_STORE/<repo>/deployments/<host>/<YYYYMMDDTHHMMSSZ>.json` |
 | `tabularium last <host>` | `<commit> <deployedAt> [dirty]` of the newest record, exit 1 if none or unreadable |
 | `tabularium freshness` | No argument (64 otherwise). Prints an input table (root nixpkgs inputs of `flake.lock` on `main`: lag vs upstream, days + commits), a host table (per host: nixpkgs pinned by its last deployed commit vs `main`'s, days + commits) and `export: <path>` |
+| `tabularium sbom <host> [--build]` | bombon CycloneDX SBOM of the toplevel of the newest record, at its commit. Prints `components`/`purl`/`cpe`/`licenses` counts and `export: <path>` |
 
 - Store: `${TABULARIUM_STORE:-$HOME/.tabularium}`, never committed.
-- Exit codes: wrapped command's code on failure, 2 dirty, 3 record exists, 4 tree changed during the deploy (not recorded), 64 usage.
+- Exit codes: wrapped command's code on failure, 2 dirty, 3 record exists, 4 tree changed during the deploy (not recorded), 5 `sbom`: evaluated toplevel ≠ record subject, 6 `sbom`: toplevel not in the local store (rerun with `--build`), 64 usage.
 - Out path is evaluated **before** the deploy (unknown host fails early); HEAD + `git diff HEAD` are re-checked after it.
 - Record written to `.new.XXXXXX` then hard-linked (shared `write_new`): never partial, never overwritten (race → exit 3).
 - `freshness`: exit 1 if no `main` branch or no `flake.lock` on `main`; exit 0 whenever an export is written, even partial.
 - `freshness` export: `$TABULARIUM_STORE/<repo>/freshness/<YYYYMMDDTHHMMSSZ>.json`, predicate type `https://github.com/gfriloux/tabularium/predicates/freshness/v0.1`.
 - `freshness` scope: root nixpkgs inputs only; lags in days + commits. `GITHUB_TOKEN` optional (unauthenticated GitHub API: 60 req/h). Offline: commits `?`/null, upstream `unavailable`.
+- `sbom` export: `$TABULARIUM_STORE/<repo>/sbom/<host>/<commit>.cdx.json`, a cache keyed by commit: reused as is, delete it to recompute (bombon upgrade). Refuses a dirty record (exit 2) and a commit missing from the clone (exit 1). No GC root: run it soon after deploying.
 - Dirty = `git diff --quiet HEAD` fails. Untracked files do not count (flakes ignore them).
 - Subject = toplevel store path, digest `sha256` = NAR hash in hex (`nix path-info --json --json-format 2`).
 - Predicate type: `https://github.com/gfriloux/tabularium/predicates/deployment/v0.1`.
@@ -46,6 +49,9 @@ default branch, `main`.
 - It also has a fake `curl` (serves `$FAKE_GH/<api path>`) and a `lock`
   helper to write a `flake.lock`; `FAKE_NIX_EVAL_FAIL` makes the fake
   `nix eval --json` fail.
+- Fake `nix build` logs its arguments to `$TMPDIR/nix-build.log` and serves a
+  3-component CycloneDX fixture. `FAKE_NIX_TOPLEVEL` overrides the evaluated
+  toplevel, `FAKE_NIX_MISSING` makes `path-info` fail.
 - `mkTest name script`: fresh git repo named `nixos`, one committed `flake.nix`,
   `TABULARIUM_STORE=$TMPDIR/store`, helper `records` counts JSON files.
 - Never assign `$out` inside a test script: it is Nix's output path.
@@ -71,7 +77,7 @@ default branch, `main`.
 
 ## Open items, in order
 
-1. Lot 2 (freshness) is done. Next: lot 3 (SBOMs) per `docs/design.md`. Rust may come with the analysers.
+1. Lot 3 (host SBOMs) is done. Next: lot 4 (CVE + VEX) per `docs/design.md`; first problem: CPE on 40/1519 components (exampleHost), `pkg:nix` PURLs unknown to vulnerability DBs. Rust may come with the analysers.
 2. **Polish, later** (POC first, owner 2026-11-07). Review minors:
    `deployedAt` is the start time; `last` takes any `*.json`; store key is
    the checkout dirname; host not validated (`--allow-dirty` as host); fake
@@ -82,6 +88,9 @@ default branch, `main`.
    and `-small` branches not handled; offline `nix eval` needs inputs local.
    Deployed ≠ booted: after a `switch` the old kernel runs until reboot,
    and tabularium cannot tell without logging into the host.
+   Lot 3: licences on 177/1519 components only (none on linux, openssl,
+   samba, tailscale); container SBOMs postponed, images in `nixos` are
+   pinned by tag without digest.
 
 ## Related
 
