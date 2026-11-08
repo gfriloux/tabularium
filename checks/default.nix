@@ -18,3 +18,4 @@
 // import ../tests/freshness.nix {inherit pkgs;}
 // import ../tests/sbom.nix {inherit pkgs;}
 // import ../tests/important.nix {inherit pkgs;}
+// import ../tests/cve-diff.nix {inherit pkgs;}
