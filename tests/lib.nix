@@ -106,13 +106,14 @@
   '';
   tabularium = pkgs.writeShellApplication {
     name = "tabularium";
-    runtimeInputs = with pkgs; [git jq coreutils gnugrep gnused miller fakeNix fakeCurl fakeVulnxscan];
+    runtimeInputs = with pkgs; [git jq coreutils findutils gnugrep gnused miller fakeNix fakeCurl fakeVulnxscan];
     runtimeEnv = {
       TABULARIUM_SBOM_NIX = "/fake/sbom.nix";
       TABULARIUM_BOMBON = "/fake/bombon";
       TABULARIUM_NIXPKGS = "/fake/nixpkgs";
       TABULARIUM_IMPORTANT_NIX = "${../src/important.nix}";
       TABULARIUM_CVE_JQ = "${../src/cve.jq}";
+      TABULARIUM_JQ = "${../src/jq}";
     };
     text = builtins.readFile ../src/tabularium.sh;
   };

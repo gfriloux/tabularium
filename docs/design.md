@@ -177,7 +177,9 @@ Each lot is usable on its own.
    [spec](superpowers/specs/2026-11-08-lot4-cve-design.md). VEX postponed until
    results can be looked at (owner).
 5. **Compliance.** Consume stc#146 output per host.
-6. **Viewer** (separate design).
+6. **Viewer.** CLI view `tabularium status` **done** (2026-11-08), see
+   [spec](superpowers/specs/2026-11-08-status-cli-design.md). Web view later
+   (separate design).
 
 ## Open questions (owner)
 
