@@ -17,3 +17,4 @@
 // import ../tests/last.nix {inherit pkgs;}
 // import ../tests/freshness.nix {inherit pkgs;}
 // import ../tests/sbom.nix {inherit pkgs;}
+// import ../tests/important.nix {inherit pkgs;}
