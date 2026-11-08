@@ -334,6 +334,11 @@ sbom() {
   fi
   IFS=$'\t' read -r commit subject dirty <<<"$fields"
 
+  if [ "$dirty" != false ]; then
+    echo "tabularium: $host was deployed from a dirty tree, its commit does not describe it" >&2
+    exit 2
+  fi
+
   # Keyed by commit: a clean commit always describes the same toplevel.
   file="$(store)/sbom/$host/$commit.cdx.json"
   if [ -e "$file" ]; then
@@ -341,10 +346,6 @@ sbom() {
     return
   fi
 
-  if [ "$dirty" != false ]; then
-    echo "tabularium: $host was deployed from a dirty tree, its commit does not describe it" >&2
-    exit 2
-  fi
   if ! git cat-file -e "$commit^{commit}" 2>/dev/null; then
     echo "tabularium: commit $commit is not in this clone" >&2
     exit 1

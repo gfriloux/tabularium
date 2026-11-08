@@ -57,6 +57,20 @@ in {
     refused 2 'dirty tree' sbom clochette
   '';
 
+  sbom_dirty_after_clean = mkSbom "sbom-dirty-after-clean" ''
+    TABULARIUM_NOW=20261107T100000Z tabularium record clochette -- true
+    tabularium sbom clochette >/dev/null
+    echo changed > flake.nix
+    TABULARIUM_NOW=20261107T120000Z tabularium record clochette --allow-dirty -- true
+    set +e
+    tabularium sbom clochette >stdout 2>err
+    code=$?
+    set -e
+    test "$code" -eq 2
+    grep -q 'dirty tree' err
+    test ! -s stdout
+  '';
+
   sbom_commit_missing = mkSbom "sbom-commit-missing" ''
     tabularium record clochette -- true
     rewrite '.predicate.gitCommit = "ffffffffffffffffffffffffffffffffffffffff"'
