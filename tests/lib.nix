@@ -2,26 +2,57 @@
 # evaluates or builds a NixOS system.
 {pkgs}: let
   fakeNix = pkgs.writeShellScriptBin "nix" ''
+    # The flake reference (first argument with a '#') and whether an input is overridden.
+    ref="" override=false
+    for a in "$@"; do
+      case "$a" in
+        --override-input) override=true ;;
+        *'#'*) [ -n "$ref" ] || ref=$a ;;
+      esac
+    done
+    host=''${ref#*#nixosConfigurations.}
+    host=''${host%%.*}
+    # Toplevel the reference evaluates to: $FAKE_NIX_TOPLEVELS/update when nixpkgs is
+    # overridden, $FAKE_NIX_TOPLEVELS/<rev> when it exists, else a fixed path per host.
+    toplevel() {
+      local rev=""
+      case "$ref" in *'?rev='*) rev=''${ref#*\?rev=}; rev=''${rev%%#*} ;; esac
+      if [ -n "''${FAKE_NIX_TOPLEVEL:-}" ]; then
+        printf '%s' "$FAKE_NIX_TOPLEVEL"
+      elif [ "$override" = true ]; then
+        printf '%s' "$(cat "$FAKE_NIX_TOPLEVELS/update")"
+      elif [ -n "$rev" ] && [ -f "''${FAKE_NIX_TOPLEVELS:-/nonexistent}/$rev" ]; then
+        printf '%s' "$(cat "$FAKE_NIX_TOPLEVELS/$rev")"
+      else
+        printf '/nix/store/00000000000000000000000000000000-nixos-system-%s' "$host"
+      fi
+    }
+    known_host() {
+      case "$host" in
+        clochette | RogueLeader | skitarii | exampleHost) ;;
+        *) echo "fake nix: attribute '$host' missing" >&2; exit 1 ;;
+      esac
+    }
     case "$1" in
       eval)
-        if [ "$2" = --json ]; then
-          [ -z "''${FAKE_NIX_EVAL_FAIL:-}" ] || { echo "fake nix: eval failed" >&2; exit 1; }
-          # nix eval --json <ref>#nixosConfigurations --apply builtins.attrNames
-          echo '["RogueLeader","clochette","exampleHost","skitarii"]'
-          exit 0
-        fi
-        # nix eval --raw <flake ref>#nixosConfigurations.<host>.config.system.build.toplevel.outPath
-        host=''${3#*#nixosConfigurations.}
-        host=''${host%%.*}
-        case "$host" in
-          clochette | RogueLeader | skitarii | exampleHost) ;;
-          *) echo "fake nix: attribute '$host' missing" >&2; exit 1 ;;
+        case "$ref" in
+          *'#nixosConfigurations')
+            [ -z "''${FAKE_NIX_EVAL_FAIL:-}" ] || { echo "fake nix: eval failed" >&2; exit 1; }
+            # nix eval --json <ref>#nixosConfigurations --apply builtins.attrNames
+            echo '["RogueLeader","clochette","exampleHost","skitarii"]'
+            ;;
+          *.outPath)
+            # nix eval --raw <ref>#nixosConfigurations.<host>.config.system.build.toplevel.outPath
+            known_host
+            toplevel
+            ;;
+          *)
+            # nix eval --json <ref>#nixosConfigurations.<host> --apply <important.nix>
+            known_host
+            f=''${FAKE_NIX_IMPORTANT:-/nonexistent}/$(basename "$(toplevel)").json
+            if [ -f "$f" ]; then cat "$f"; else echo '[]'; fi
+            ;;
         esac
-        if [ -n "''${FAKE_NIX_TOPLEVEL:-}" ]; then
-          printf '%s' "$FAKE_NIX_TOPLEVEL"
-        else
-          printf '/nix/store/00000000000000000000000000000000-nixos-system-%s' "$host"
-        fi
         ;;
       path-info)
         # Mimics nix 2.34: plain --json is deprecated, format 2 keys by base name under .info.
@@ -30,18 +61,41 @@
         printf '{"info":{"%s":{"narHash":"sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU="}}}' "''${5#/nix/store/}"
         ;;
       build)
-        # nix build --file sbom.nix --argstr …: logs its arguments, serves a 3-component BOM.
-        echo "$*" >>"$TMPDIR/nix-build.log"
-        cat >"$TMPDIR/bom.cdx.json" <<'BOM'
+        case " $* " in
+          *' --file '*)
+            # nix build --file sbom.nix --argstr …: logs its arguments, serves a 3-component BOM.
+            echo "$*" >>"$TMPDIR/nix-build.log"
+            cat >"$TMPDIR/bom.cdx.json" <<'BOM'
     {"bomFormat":"CycloneDX","specVersion":"1.7","components":[
      {"name":"libidn2","version":"2.3.8","purl":"pkg:nix/libidn2@2.3.8","cpe":"cpe:2.3:a:gnu:libidn2:2.3.8:*:*:*:*:*:*:*","licenses":[{"license":{"id":"LGPL-3.0-or-later"}}]},
      {"name":"openssl","version":"3.5.9","purl":"pkg:nix/openssl@3.5.9"},
      {"name":"blob","version":""}]}
     BOM
-        echo "$TMPDIR/bom.cdx.json"
+            echo "$TMPDIR/bom.cdx.json"
+            ;;
+          *' --dry-run '*)
+            # nix build --dry-run <installable>: $FAKE_NIX_TO_BUILD derivations to build.
+            known_host
+            n=''${FAKE_NIX_TO_BUILD:-0}
+            [ "$n" -eq 0 ] || echo "these $n derivations will be built:" >&2
+            ;;
+          *)
+            # nix build --no-link --print-out-paths <installable>: realises the toplevel.
+            known_host
+            echo "$(toplevel)" | tee -a "$TMPDIR/nix-realise.log"
+            ;;
+        esac
         ;;
       *) echo "fake nix: unexpected $*" >&2; exit 99 ;;
     esac
+  '';
+  # vulnxscan <path> --out <csv>: serves $FAKE_VULNX/<basename>.csv and its .log, logs the call.
+  fakeVulnxscan = pkgs.writeShellScriptBin "vulnxscan" ''
+    echo "$*" >>"$TMPDIR/vulnxscan.log"
+    b=''${FAKE_VULNX:-/nonexistent}/$(basename "$1")
+    [ -f "$b.csv" ] || { echo "fake vulnxscan: no fixture for $1" >&2; exit 1; }
+    cp "$b.csv" "$3"
+    [ ! -f "$b.log" ] || cat "$b.log" >&2
   '';
   # GitHub API answered from files: $FAKE_GH/<path after https://api.github.com/>.
   fakeCurl = pkgs.writeShellScriptBin "curl" ''
@@ -52,11 +106,13 @@
   '';
   tabularium = pkgs.writeShellApplication {
     name = "tabularium";
-    runtimeInputs = with pkgs; [git jq coreutils fakeNix fakeCurl];
+    runtimeInputs = with pkgs; [git jq coreutils gnugrep gnused miller fakeNix fakeCurl fakeVulnxscan];
     runtimeEnv = {
       TABULARIUM_SBOM_NIX = "/fake/sbom.nix";
       TABULARIUM_BOMBON = "/fake/bombon";
       TABULARIUM_NIXPKGS = "/fake/nixpkgs";
+      TABULARIUM_IMPORTANT_NIX = "${../src/important.nix}";
+      TABULARIUM_CVE_JQ = "${../src/cve.jq}";
     };
     text = builtins.readFile ../src/tabularium.sh;
   };

@@ -5,27 +5,32 @@ local, uncommitted store. Read `docs/design.md` first: it is the intent, and it
 is expected to move as iterative development teaches us things. Update it
 rather than forcing the code to fit.
 
-## What exists (lots 1 to 3, 2026-11-08)
+## What exists (lots 1 to 4, 2026-11-08)
 
 `src/tabularium.sh`, packaged with `writeShellApplication` (runtime: git, jq,
-nix, coreutils; nix is pinned by this flake, not the system's). bombon is an input
-of this flake; `src/sbom.nix` reaches the script through `runtimeEnv`.
+nix, coreutils, grep, sed, curl; nix is pinned by this flake, not the system's). bombon is an input
+of this flake; `src/sbom.nix`, `src/important.nix` and `src/cve.jq` reach the script through
+`runtimeEnv`. Lot 4 adds miller (`mlr`, CSV → JSON) and vulnxscan (`tiiuae/sbomnix`
+input).
 
 | Command | Effect |
 |---|---|
 | `tabularium record <host> [--allow-dirty] -- <cmd…>` | Refuses a dirty tree (exit 2), runs `<cmd>` with the terminal attached, and on success writes an in-toto Statement v1 to `$TABULARIUM_STORE/<repo>/deployments/<host>/<YYYYMMDDTHHMMSSZ>.json` |
 | `tabularium last <host>` | `<commit> <deployedAt> [dirty]` of the newest record, exit 1 if none or unreadable |
 | `tabularium freshness` | No argument (64 otherwise). Prints an input table (root nixpkgs inputs of `flake.lock` on `main`: lag vs upstream, days + commits), a host table (per host: nixpkgs pinned by its last deployed commit vs `main`'s, days + commits) and `export: <path>` |
+| `tabularium cve <host> [--no-build] [--osv]` | Scans 3 states with vulnxscan (OSV off unless `--osv`: it would send each host's component list to api.osv.dev): `deployed` (record subject), `main`, `update` (`main` + root `nixpkgs` at upstream head). Prints `deployed → main` and `main → update`: CVEs fixed (solid/triage/patch), new, remaining, kernel apart, bumps of important packages; `export: <path>` |
 | `tabularium sbom <host> [--build]` | bombon CycloneDX SBOM of the toplevel of the newest record, at its commit. Prints `components`/`purl`/`cpe`/`licenses` counts and `export: <path>` |
 
 - Store: `${TABULARIUM_STORE:-$HOME/.tabularium}`, never committed.
-- Exit codes: wrapped command's code on failure, 2 dirty, 3 record exists, 4 tree changed during the deploy (not recorded), 5 `sbom`: evaluated toplevel ≠ record subject, 6 `sbom`: toplevel not in the local store (rerun with `--build`), 64 usage.
+- Exit codes: wrapped command's code on failure, 2 dirty, 3 record exists, 4 tree changed during the deploy (not recorded), 5 `sbom`: evaluated toplevel ≠ record subject, 6 `sbom`: toplevel not in the local store (rerun with `--build`), 64 usage. `cve`: 1 no record / no `main` / no `flake.lock` on `main`, else 0 whenever an export is written (states may be `skipped`/`failed`).
 - Out path is evaluated **before** the deploy (unknown host fails early); HEAD + `git diff HEAD` are re-checked after it.
 - Record written to `.new.XXXXXX` then hard-linked (shared `write_new`): never partial, never overwritten (race → exit 3).
 - `freshness`: exit 1 if no `main` branch or no `flake.lock` on `main`; exit 0 whenever an export is written, even partial.
 - `freshness` export: `$TABULARIUM_STORE/<repo>/freshness/<YYYYMMDDTHHMMSSZ>.json`, predicate type `https://github.com/gfriloux/tabularium/predicates/freshness/v0.1`.
 - `freshness` scope: root nixpkgs inputs only; lags in days + commits. `GITHUB_TOKEN` optional (unauthenticated GitHub API: 60 req/h). Offline: commits `?`/null, upstream `unavailable`.
 - `sbom` export: `$TABULARIUM_STORE/<repo>/sbom/<host>/<commit>.cdx.json`, a cache keyed by commit: reused as is, delete it to recompute (bombon upgrade). Refuses a dirty record (exit 2) and a commit missing from the clone (exit 1). No GC root: run it soon after deploying.
+- `cve` export: `$TABULARIUM_STORE/<repo>/cve/<host>/<YYYYMMDDTHHMMSSZ>.json`, predicate type `https://github.com/gfriloux/tabularium/predicates/cve/v0.1`. Tiers: solid = ≥ 2 sources, triage = 1, patch = named by a nixpkgs patch file (vulnxscan log). A comparison is `degraded` when a source is missing on one side (WARNING lines of vulnxscan's log) or warnings exist. Realises states by default (prints `<state>: N derivations to build`); `--no-build` marks states needing a local build `skipped`.
+- Important packages (`src/important.nix`): `environment.systemPackages`, home-manager `home.packages`, `.package` of enabled `services`/`programs`/`virtualisation`, the kernel.
 - Dirty = `git diff --quiet HEAD` fails. Untracked files do not count (flakes ignore them).
 - Subject = toplevel store path, digest `sha256` = NAR hash in hex (`nix path-info --json --json-format 2`).
 - Predicate type: `https://github.com/gfriloux/tabularium/predicates/deployment/v0.1`.
@@ -52,6 +57,13 @@ default branch, `main`.
 - Fake `nix build` logs its arguments to `$TMPDIR/nix-build.log` and serves a
   3-component CycloneDX fixture. `FAKE_NIX_TOPLEVEL` overrides the evaluated
   toplevel, `FAKE_NIX_MISSING` makes `path-info` fail.
+- Lot 4 fakes: `vulnxscan` serves `$FAKE_VULNX/<toplevel basename>.csv` (+ `.log`)
+  and logs calls to `$TMPDIR/vulnxscan.log`; fake `nix` maps `?rev=<sha>` to
+  `$FAKE_NIX_TOPLEVELS/<sha>` and `--override-input` to `$FAKE_NIX_TOPLEVELS/update`,
+  serves `$FAKE_NIX_IMPORTANT/<basename>.json`, `FAKE_NIX_TO_BUILD` drives
+  `build --dry-run`, realisations go to `$TMPDIR/nix-realise.log`.
+  `important.nix` and `cve.jq` are also tested alone (`tests/important.nix`,
+  `tests/cve-diff.nix`).
 - `mkTest name script`: fresh git repo named `nixos`, one committed `flake.nix`,
   `TABULARIUM_STORE=$TMPDIR/store`, helper `records` counts JSON files.
 - Never assign `$out` inside a test script: it is Nix's output path.
@@ -77,7 +89,7 @@ default branch, `main`.
 
 ## Open items, in order
 
-1. Lot 3 (host SBOMs) is done. Next: lot 4 (CVE + VEX) per `docs/design.md`; first problem: CPE on 40/1519 components (exampleHost), `pkg:nix` PURLs unknown to vulnerability DBs. Candidate: tiiuae/sbomnix on skitarii's deployed toplevel (2026-11-08): 481 CPE / 931 components vs bombon's 45 / 464, but 376 have vendor = product (likely guessed from the name; `bash:5.3p20` vs bombon's `bash:5.3:20`), 0 licences; finds `linux_kernel`. Trade-off: recall vs false positives. Its `vulnxscan` (grype + OSV + vulnix) is a lot 4 candidate. Rust may come with the analysers.
+1. Lot 4 (CVEs and important bumps, no VEX) is done. Next (owner's call): a viewer for the exports of lots 2–4, then VEX/triage. Kept for later: bombon has few but exact CPE (40/1519 on exampleHost), sbomnix many guessed ones (376/481 vendor = product); kernel CVE counts do not move with kernel bumps (193 on 6.18.57 and .60); sbomnix also ships `vulnxscan-diff`. Rust may come with the analysers.
 2. **Polish, later** (POC first, owner 2026-11-07). Review minors:
    `deployedAt` is the start time; `last` takes any `*.json`; store key is
    the checkout dirname; host not validated (`--allow-dirty` as host); fake

@@ -7,6 +7,7 @@ usage: tabularium record <host> [--allow-dirty] -- <command...>
        tabularium last <host>
        tabularium freshness
        tabularium sbom <host> [--build]
+       tabularium cve <host> [--no-build] [--osv]
 USAGE
   exit 64
 }
@@ -19,6 +20,14 @@ tree_state() {
 
 store() {
   printf '%s/%s' "${TABULARIUM_STORE:-$HOME/.tabularium}" "$(basename "$(git rev-parse --show-toplevel)")"
+}
+
+# sha256 (hex) of the NAR of a valid store path.
+nar_sha256() {
+  local nar_hash
+  nar_hash=$(nix path-info --json --json-format 2 "$1" | jq -r --arg p "${1#/nix/store/}" '.info[$p].narHash') || return 1
+  [[ $nar_hash == sha256-* ]] || return 1
+  printf '%s' "${nar_hash#sha256-}" | base64 -d | od -An -tx1 | tr -d ' \n'
 }
 
 # Written aside then hard-linked: the file appears whole or not at all, and ln
@@ -86,9 +95,11 @@ record() {
     exit 4
   fi
 
-  local nar_hash sha256
-  nar_hash=$(nix path-info --json --json-format 2 "$out_path" | jq -r --arg p "${out_path#/nix/store/}" '.info[$p].narHash')
-  sha256=$(printf '%s' "${nar_hash#sha256-}" | base64 -d | od -An -tx1 | tr -d ' \n')
+  local sha256
+  if ! sha256=$(nar_sha256 "$out_path"); then
+    echo "tabularium: cannot read the NAR hash of $out_path (not in the local store?); not recorded" >&2
+    exit 1
+  fi
 
   local json
   json=$(jq -n \
@@ -114,6 +125,29 @@ latest_record() {
   dir="$(store)/deployments/$1"
   [ -d "$dir" ] || return 0
   find "$dir" -maxdepth 1 -name '*.json' | sort | tail -n 1
+}
+
+# "<commit>\t<subject>\t<dirty>" of a record, or exit 1 if it is not one.
+record_fields() {
+  local fields
+  if ! fields=$(jq -r '[.predicate.gitCommit, .subject[0].name, .predicate.dirty]
+      | if map(type) == ["string", "string", "boolean"] then @tsv else error end' "$1" 2>/dev/null) ||
+    [ -z "$fields" ]; then
+    echo "tabularium: $1 is not a valid record" >&2
+    exit 1
+  fi
+  printf '%s\n' "$fields"
+}
+
+# Newest record of <host> (exit 1 if none), as record_fields.
+host_record() {
+  local latest
+  latest=$(latest_record "$1")
+  if [ -z "$latest" ]; then
+    echo "tabularium: no deployment recorded for $1" >&2
+    exit 1
+  fi
+  record_fields "$latest"
 }
 
 last() {
@@ -320,18 +354,8 @@ sbom() {
 
   cd "$(git rev-parse --show-toplevel)"
 
-  local latest fields commit subject dirty file toplevel bom
-  latest=$(latest_record "$host")
-  if [ -z "$latest" ]; then
-    echo "tabularium: no deployment recorded for $host" >&2
-    exit 1
-  fi
-  if ! fields=$(jq -r '[.predicate.gitCommit, .subject[0].name, .predicate.dirty]
-      | if map(type) == ["string", "string", "boolean"] then @tsv else error end' "$latest" 2>/dev/null) ||
-    [ -z "$fields" ]; then
-    echo "tabularium: $latest is not a valid record" >&2
-    exit 1
-  fi
+  local fields commit subject dirty file toplevel bom
+  fields=$(host_record "$host")
   IFS=$'\t' read -r commit subject dirty <<<"$fields"
 
   if [ "$dirty" != false ]; then
@@ -368,6 +392,193 @@ sbom() {
   sbom_summary "$file"
 }
 
+# One state of a host, scanned: <toplevel> is a store path or an installable to
+# realise, <config> the installable of its NixOS system (or "" when unknown).
+# $TABULARIUM_OSV=true lets vulnxscan send the component list to api.osv.dev.
+# Prints a state JSON; build and scan problems become "skipped" or "failed".
+cve_state() {
+  local name=$1 target=$2 config=$3 no_build=$4 n path dir code state important=null
+  shift 4
+  if [[ $target != /nix/store/* ]]; then
+    n=$(nix build --dry-run "$target" "$@" 2>&1 >/dev/null |
+      sed -nE 's/^these ([0-9]+) derivations will be built:$/\1/p; s/^this derivation will be built:$/1/p' |
+      head -n 1) || n=""
+    if [ "${n:-0}" -gt 0 ]; then
+      echo "$name: $n derivations to build" >&2
+      if [ "$no_build" = true ]; then
+        jq -nc --arg r "needs a local build of $n derivations" '{status: "skipped", reason: $r}'
+        return
+      fi
+    fi
+    if ! path=$(nix build --no-link --print-out-paths "$target" "$@" | sed '/^$/d' | tail -n 1) || [ -z "$path" ]; then
+      jq -nc '{status: "failed", reason: "build failed"}'
+      return
+    fi
+  else
+    path=$target
+  fi
+  if [ -n "$config" ]; then
+    important=$(nix eval --json --impure "$config" "$@" --apply "import $TABULARIUM_IMPORTANT_NIX") || important=null
+  fi
+
+  dir=$(mktemp -d)
+  code=0
+  local scan=(vulnxscan "$path" --out "$dir/vulns.csv") all='["grype", "osv", "vulnix"]'
+  if [ "${TABULARIUM_OSV:-false}" != true ]; then
+    scan+=(--skip-osv)
+    all='["grype", "vulnix"]'
+  fi
+  "${scan[@]}" >"$dir/log" 2>&1 || code=$?
+  if [ "$code" -ne 0 ]; then
+    rm -rf "$dir"
+    jq -nc --arg p "$path" --arg r "vulnxscan exited $code" '{status: "failed", toplevel: $p, reason: $r}'
+    return
+  fi
+  # A failing scanner only shows as a WARNING (or worse) line in vulnxscan's log.
+  grep -E '^(WARNING|ERROR|CRITICAL)' "$dir/log" | jq -Rn '[inputs]' >"$dir/warnings.json" || echo '[]' >"$dir/warnings.json"
+  # vulnxscan drops CVEs that a nixpkgs patch file names; its log is where they show.
+  sed -nE "s/^[A-Z]+ +([^ ]+) for '([^']+)' is patched with:.*/\1\t\2/p" "$dir/log" |
+    jq -Rn '[inputs | split("\t") | {id: .[0], package: .[1]}] | unique' >"$dir/patched.json"
+  # mlr prints nothing at all for a CSV without rows.
+  if ! state=$({ mlr --icsv --ojson cat "$dir/vulns.csv" && echo; } | jq -sc 'add // []' | jq -c \
+    --arg p "$path" --argjson important "$important" --slurpfile patched "$dir/patched.json" \
+    --slurpfile warnings "$dir/warnings.json" --argjson all "$all" '
+    [.[] | {id: .vuln_id, package: (.package | tostring), version: (.version_local | tostring),
+            severity: (.severity | tostring),
+            sources: [("grype", "osv", "vulnix") as $s | select(.[$s] | tostring == "1") | $s]}]
+    | unique_by([.id, .package]) as $cves
+    | {status: "scanned", toplevel: $p,
+       sources: [$all[] | . as $s | select($warnings[0] | map(ascii_downcase | contains($s)) | any | not)],
+       warnings: ($warnings[0] | map(select(. as $w | $all | map(. as $s | $w | ascii_downcase | contains($s)) | any | not))),
+       cves: $cves, patched: $patched[0], important: $important}'); then
+    state=$(jq -nc --arg p "$path" '{status: "failed", toplevel: $p, reason: "unreadable vulnxscan report"}')
+  fi
+  rm -rf "$dir"
+  printf '%s\n' "$state"
+}
+
+cve_summary() {
+  jq -r '
+    def line($label):
+      if .status == "unavailable" then "\($label): unavailable (\(.why))"
+      else "\($label): fixed \([.fixed[] | length] | add) (solid \(.fixed.solid | length), triage \(.fixed.triage | length), patch \(.fixed.patch | length)), new \(.new.solid + .new.triage | length), remaining \(.remaining.solid + .remaining.triage | length), kernel \(.kernel.from) → \(.kernel.to)"
+        + (if .status == "degraded" then " [degraded: \(.missingSources | join(", "))]" else "" end)
+      end;
+    .predicate as $p
+    | [["deploy", "deployed", "main"], ["update", "main", "update"]][]
+    | . as [$c, $from, $to]
+    | select($p.comparisons[$c])
+    | $p.comparisons[$c]
+      + {why: ([$from, $to] | map(select($p.states[.].status != "scanned") | "\(.): \($p.states[.].reason)") | join(", "))}
+    | line("\($from) → \($to)"),
+      (select(.status != "unavailable")
+        | if .bumps == null then "bumps \($from) → \($to): unknown"
+          elif .bumps == [] then "bumps \($from) → \($to): none"
+          else "bumps \($from) → \($to):", (.bumps[] | "  \(.name) \(.from) → \(.to)") end)
+  ' "$1"
+  echo
+  echo "export: $1"
+}
+
+# CVEs a deploy (deployed → main) and a nixpkgs update (main → update) would
+# fix, and bumps of important packages.
+cve() {
+  local host="${1:-}" no_build=false
+  [ -n "$host" ] || usage
+  shift
+  # OSV is off by default: it would receive the host's component list.
+  TABULARIUM_OSV=false
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --no-build) no_build=true ;;
+      --osv) TABULARIUM_OSV=true ;;
+      *) usage ;;
+    esac
+    shift
+  done
+
+  cd "$(git rev-parse --show-toplevel)"
+
+  local fields commit subject dirty main
+  fields=$(host_record "$host")
+  IFS=$'\t' read -r commit subject dirty <<<"$fields"
+  if ! main=$(git rev-parse -q --verify 'refs/heads/main^{commit}'); then
+    echo "tabularium: no main branch" >&2
+    exit 1
+  fi
+  if ! git cat-file -e "$main:flake.lock" 2>/dev/null; then
+    echo "tabularium: no flake.lock on main" >&2
+    exit 1
+  fi
+
+  local ts file attr="nixosConfigurations.$host"
+  ts="${TABULARIUM_NOW:-$(date -u +%Y%m%dT%H%M%SZ)}"
+  file="$(store)/cve/$host/$ts.json"
+
+  # The deployed toplevel is the recorded store path; its config is only known
+  # from the commit when the tree was clean.
+  local deployed deployed_config=""
+  [ "$dirty" != false ] || deployed_config="git+file://$PWD?rev=$commit#$attr"
+  if nix path-info --json --json-format 2 "$subject" >/dev/null 2>&1; then
+    deployed=$(cve_state deployed "$subject" "$deployed_config" "$no_build")
+  elif [ "$dirty" = false ]; then
+    deployed=$(cve_state deployed "$deployed_config.config.system.build.toplevel" "$deployed_config" "$no_build")
+  else
+    deployed='{"status":"skipped","reason":"dirty record, toplevel not in the local store"}'
+  fi
+
+  local main_state
+  main_state=$(cve_state main "git+file://$PWD?rev=$main#$attr.config.system.build.toplevel" \
+    "git+file://$PWD?rev=$main#$attr" "$no_build")
+
+  # main with its root nixpkgs input moved to the head of the branch it follows.
+  local update locked="" branch="" refs head="" nixpkgs
+  IFS=$'\t' read -r _ locked _ branch < <(nixpkgs_inputs "$main" | grep $'^nixpkgs\t') || true
+  nixpkgs=$(jq -nc --arg b "$branch" --arg f "$locked" '{branch: $b, from: $f, to: null}')
+  if [ -z "$locked" ] || [ -z "$branch" ]; then
+    update='{"status":"skipped","reason":"no root nixpkgs input"}'
+  elif ! refs=$(gh_api "repos/NixOS/nixpkgs/git/matching-refs/heads/$branch") ||
+    ! head=$(jq -er --arg r "refs/heads/$branch" '.[] | select(.ref == $r) | .object.sha' <<<"$refs"); then
+    update=$(jq -c --argjson n "$nixpkgs" -n '{status: "skipped", reason: "upstream unavailable", nixpkgs: $n}')
+  else
+    nixpkgs=$(jq -c --arg h "$head" '.to = $h' <<<"$nixpkgs")
+    if [ "$head" = "$locked" ]; then
+      update=$main_state
+    else
+      update=$(cve_state update "git+file://$PWD?rev=$main#$attr.config.system.build.toplevel" \
+        "git+file://$PWD?rev=$main#$attr" "$no_build" --override-input nixpkgs "github:NixOS/nixpkgs/$head")
+    fi
+    update=$(jq -c --argjson n "$nixpkgs" '. + {nixpkgs: $n}' <<<"$update")
+  fi
+
+  local states comparisons subjects statement
+  states=$(jq -nc --argjson d "$deployed" --argjson m "$main_state" --argjson u "$update" \
+    '{deployed: $d, main: $m, update: $u}')
+  comparisons=$(jq -nc \
+    --argjson d "$(jq -n --argjson from "$deployed" --argjson to "$main_state" -f "$TABULARIUM_CVE_JQ")" \
+    --argjson u "$(jq -n --argjson from "$main_state" --argjson to "$update" -f "$TABULARIUM_CVE_JQ")" \
+    '{deploy: $d, update: $u}')
+
+  subjects='[]'
+  local path
+  for path in $(jq -r '[.[] | select(.status == "scanned") | .toplevel] | unique | .[]' <<<"$states"); do
+    subjects=$(jq -c --arg p "$path" --arg d "$(nar_sha256 "$path" 2>/dev/null || true)" \
+      '. + [{name: $p, digest: (if $d == "" then {} else {sha256: $d} end)}]' <<<"$subjects")
+  done
+
+  statement=$(jq -n --argjson subjects "$subjects" --argjson states "$states" --argjson comparisons "$comparisons" \
+    --arg host "$host" --arg repo "$(basename "$PWD")" --arg main "$main" \
+    --arg at "${ts:0:4}-${ts:4:2}-${ts:6:2}T${ts:9:2}:${ts:11:2}:${ts:13:2}Z" '{
+      "_type": "https://in-toto.io/Statement/v1",
+      subject: $subjects,
+      predicateType: "https://github.com/gfriloux/tabularium/predicates/cve/v0.1",
+      predicate: {host: $host, repository: $repo, generatedAt: $at, mainCommit: $main,
+                  states: $states, comparisons: $comparisons}
+    }')
+  printf '%s\n' "$statement" | write_new "$file"
+  cve_summary "$file"
+}
+
 case "${1:-}" in
   last)
     shift
@@ -384,6 +595,10 @@ case "${1:-}" in
   sbom)
     shift
     sbom "$@"
+    ;;
+  cve)
+    shift
+    cve "$@"
     ;;
   *) usage ;;
 esac

@@ -134,7 +134,7 @@ Consequences (designer's notes):
 |---|---|---|
 | Host SBOM | **bombon** (nikstur) | CycloneDX, PURL from nixpkgs `meta.identifiers`, records patches |
 | Container SBOM | **syft** on the images declared in `virtualisation.oci-containers` | Pin the CycloneDX schema version |
-| CVE | **grype** on the SBOMs | Local DB, no server |
+| CVE | **vulnxscan** (tiiuae/sbomnix: grype + OSV + vulnix, nixpkgs patch detection) | Local DBs + OSV API; chosen over grype alone in lot 4 |
 | VEX | **OpenVEX** files, written with **vexctl**, fed to `grype --vex` | No Nix tool emits VEX; statements are authored by hand |
 | Lock freshness | **flake-checker** (DeterminateSystems), or read `flake.lock` directly | |
 
@@ -173,7 +173,9 @@ Each lot is usable on its own.
 3. **SBOMs.** Host closures, CycloneDX (bombon). **Done** (2026-11-08), see
    [spec](superpowers/specs/2026-11-08-lot3-sbom-design.md). Container images
    postponed: `nixos` pins them by tag without digest.
-4. **CVE + VEX.** grype over the SBOMs, OpenVEX statements.
+4. **CVEs and important bumps.** **Done** (2026-11-08), see
+   [spec](superpowers/specs/2026-11-08-lot4-cve-design.md). VEX postponed until
+   results can be looked at (owner).
 5. **Compliance.** Consume stc#146 output per host.
 6. **Viewer** (separate design).
 
