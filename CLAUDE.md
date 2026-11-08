@@ -77,7 +77,7 @@ default branch, `main`.
 
 ## Open items, in order
 
-1. Lot 3 (host SBOMs) is done. Next: lot 4 (CVE + VEX) per `docs/design.md`; first problem: CPE on 40/1519 components (exampleHost), `pkg:nix` PURLs unknown to vulnerability DBs. Rust may come with the analysers.
+1. Lot 3 (host SBOMs) is done. Next: lot 4 (CVE + VEX) per `docs/design.md`; first problem: CPE on 40/1519 components (exampleHost), `pkg:nix` PURLs unknown to vulnerability DBs. Candidate: tiiuae/sbomnix on skitarii's deployed toplevel (2026-11-08): 481 CPE / 931 components vs bombon's 45 / 464, but 376 have vendor = product (likely guessed from the name; `bash:5.3p20` vs bombon's `bash:5.3:20`), 0 licences; finds `linux_kernel`. Trade-off: recall vs false positives. Its `vulnxscan` (grype + OSV + vulnix) is a lot 4 candidate. Rust may come with the analysers.
 2. **Polish, later** (POC first, owner 2026-11-07). Review minors:
    `deployedAt` is the start time; `last` takes any `*.json`; store key is
    the checkout dirname; host not validated (`--allow-dirty` as host); fake
