@@ -208,4 +208,31 @@ in {
     tabularium status >stdout
     grep -Eq '^skitarii .* 4000 \(4000 triage\) ' stdout
   '';
+
+  # A deployed state skipped by `cve --no-build` is unavailable, not stale.
+  status_deployed_skipped = mkStatus "status-deployed-skipped" ''
+    rec skitarii 20261107T213427Z ${C} ${S}
+    export states_extra='{"deployed":{"status":"skipped","reason":"needs a local build of 3 derivations"}}'
+    cvex skitarii 20261108T102706Z "$main" ${S} '{"status":"unavailable"}'
+    tabularium status >stdout
+    ! grep -q 'stale' stdout
+    grep -Eq '^skitarii .* \? +0 +2026-11-08 10:27$' stdout
+    tabularium status skitarii >detail
+    grep -qx 'deployed → main: unavailable (deployed: needs a local build of 3 derivations)' detail
+  '';
+
+  # Odd files in the store: each is skipped with a warning, the rest is shown.
+  status_odd_exports = mkStatus "status-odd-exports" ''
+    ${skitarii}
+    rec clochette 20261107T213427Z ${C} /nix/store/00000000000000000000000000000000-nixos-system-clochette
+    mkdir -p $st/cve/clochette
+    echo null >$st/cve/clochette/20261108T100000Z.json
+    rec RogueLeader 20261107T213427Z ${C} ${S}
+    mkdir -p $st/cve/RogueLeader
+    printf '{}\n{}\n' >$st/cve/RogueLeader/20261108T100000Z.json
+    tabularium status >stdout 2>err
+    test "$(grep -c 'is unreadable, skipped' err)" -eq 2
+    grep -Eq '^skitarii .* 6 \(5 triage, 1 patch\) ' stdout
+    grep -Eq '^clochette .* never$' stdout
+  '';
 }

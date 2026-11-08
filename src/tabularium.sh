@@ -576,11 +576,15 @@ newest() {
   find "$1" -maxdepth 1 -name '*.json' | sort | tail -n 1
 }
 
-# A JSON file, or null (with a warning) when it cannot be read.
+# Exactly one JSON object from a file, or null (with a warning) for anything
+# else: status_input pairs keys and documents, one line each.
 read_export() {
+  local doc
   if [ -z "$1" ]; then
     echo null
-  elif ! jq -ce . "$1" 2>/dev/null; then
+  elif doc=$(jq -cse 'if length == 1 and (.[0] | type) == "object" then .[0] else error end' "$1" 2>/dev/null); then
+    printf '%s\n' "$doc"
+  else
     echo "tabularium: $1 is unreadable, skipped" >&2
     echo null
   fi

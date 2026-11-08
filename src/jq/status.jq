@@ -39,7 +39,9 @@ def cve_line: "  \(.severity)  \(.id)  \(.package) \(.version)";
     | $x.record.subject[0].name as $s
     | $x.cve.predicate as $c
     | {name: $h, record: $r, subject: $s, cve: $c,
-       stale: ($c != null and $r != null and $c.states.deployed.toplevel != $s)};
+       # A deployed state without toplevel was skipped or failed: unavailable, not stale.
+       stale: ($c != null and $r != null and $c.states.deployed.toplevel != null
+               and $c.states.deployed.toplevel != $s)};
   def row:
     . as $h
     | [ .name,
