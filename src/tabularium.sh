@@ -309,20 +309,56 @@ sbom_summary() {
 
 # CycloneDX SBOM (bombon) of the toplevel <host> was last deployed with.
 sbom() {
-  local host="${1:-}"
+  local host="${1:-}" build=false
   [ -n "$host" ] || usage
   shift
   if [ "${1:-}" = "--build" ]; then
+    build=true
     shift
   fi
   [ "$#" -eq 0 ] || usage
 
   cd "$(git rev-parse --show-toplevel)"
 
-  local latest commit file bom
+  local latest fields commit subject dirty file toplevel bom
   latest=$(latest_record "$host")
-  commit=$(jq -r '.predicate.gitCommit' "$latest")
+  if [ -z "$latest" ]; then
+    echo "tabularium: no deployment recorded for $host" >&2
+    exit 1
+  fi
+  if ! fields=$(jq -r '[.predicate.gitCommit, .subject[0].name, .predicate.dirty]
+      | if map(type) == ["string", "string", "boolean"] then @tsv else error end' "$latest" 2>/dev/null) ||
+    [ -z "$fields" ]; then
+    echo "tabularium: $latest is not a valid record" >&2
+    exit 1
+  fi
+  IFS=$'\t' read -r commit subject dirty <<<"$fields"
+
+  # Keyed by commit: a clean commit always describes the same toplevel.
   file="$(store)/sbom/$host/$commit.cdx.json"
+  if [ -e "$file" ]; then
+    sbom_summary "$file"
+    return
+  fi
+
+  if [ "$dirty" != false ]; then
+    echo "tabularium: $host was deployed from a dirty tree, its commit does not describe it" >&2
+    exit 2
+  fi
+  if ! git cat-file -e "$commit^{commit}" 2>/dev/null; then
+    echo "tabularium: commit $commit is not in this clone" >&2
+    exit 1
+  fi
+  toplevel=$(nix eval --raw "git+file://$PWD?rev=$commit#nixosConfigurations.$host.config.system.build.toplevel.outPath")
+  if [ "$toplevel" != "$subject" ]; then
+    echo "tabularium: $host at $commit evaluates to $toplevel, the record says $subject" >&2
+    exit 5
+  fi
+  # bombon reads the runtime closure: a missing toplevel means building the host.
+  if [ "$build" = false ] && ! nix path-info --json --json-format 2 "$subject" >/dev/null 2>&1; then
+    echo "tabularium: $subject is not in the local store; rerun with --build to build it" >&2
+    exit 6
+  fi
 
   bom=$(nix build --no-link --print-out-paths --impure --file "$TABULARIUM_SBOM_NIX" \
     --argstr repo "$PWD" --argstr rev "$commit" --argstr host "$host" \
