@@ -230,4 +230,14 @@ in {
     ! grep -q -- '--skip-osv' $TMPDIR/vulnxscan.log
     jq -e '.predicate.states.main.sources == ["grype", "osv", "vulnix"]' $export_file
   '';
+
+  # A large closure: thousands of findings must not go through a command-line argument.
+  cve_large_report = mkCve "cve-large-report" ''
+    ${deployedThenMain}
+    vulnx ${D}
+    for i in $(seq 4000); do echo "\"CVE-2026-$i\",\"u\",\"pkg$i\",\"1.0\",5.0,1,0,0,1"; done >>$FAKE_VULNX/${D}.csv
+    vulnx ${M}
+    tabularium cve clochette >stdout
+    grep -q 'deployed → main: fixed 4000 ' stdout
+  '';
 }

@@ -194,4 +194,18 @@ in {
     test "$code" -eq 1
     grep -q 'no deployment recorded for nope' err
   '';
+
+  # Real exports exceed the 128 KiB a single argument may hold.
+  status_large_export = mkStatus "status-large-export" ''
+    rec skitarii 20261107T213427Z ${C} ${S}
+    mkdir -p $st/cve/skitarii
+    jq -n --arg m "$main" --arg t ${S} '[range(4000) | {id: "CVE-2026-\(.)", package: "pkg\(.)", version: "1.0", severity: "5.0"}] as $many
+      | {predicate: {host: "skitarii", generatedAt: "2026-11-08T10:27:06Z", mainCommit: $m,
+          states: {deployed: {status: "scanned", toplevel: $t}, main: {status: "scanned"}, update: {status: "scanned"}},
+          comparisons: {deploy: {status: "ok", missingSources: [], fixed: {solid: [], triage: $many, patch: []},
+            new: {solid: [], triage: []}, remaining: {solid: [], triage: $many}, uncertain: [], kernel: {from: 0, to: 0}, bumps: []}}}}' \
+      >$st/cve/skitarii/20261108T102706Z.json
+    tabularium status >stdout
+    grep -Eq '^skitarii .* 4000 \(4000 triage\) ' stdout
+  '';
 }

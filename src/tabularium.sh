@@ -535,30 +535,37 @@ cve() {
     update=$(jq -c --argjson n "$nixpkgs" '. + {nixpkgs: $n}' <<<"$update")
   fi
 
-  local states comparisons subjects statement
-  states=$(jq -nc --argjson d "$deployed" --argjson m "$main_state" --argjson u "$update" \
-    '{deployed: $d, main: $m, update: $u}')
-  comparisons=$(jq -nc \
-    --argjson d "$(jq -n --argjson from "$deployed" --argjson to "$main_state" -f "$TABULARIUM_CVE_JQ")" \
-    --argjson u "$(jq -n --argjson from "$main_state" --argjson to "$update" -f "$TABULARIUM_CVE_JQ")" \
-    '{deploy: $d, update: $u}')
+  # States can exceed what one command-line argument may hold: they go
+  # through files (printf is a builtin, not subject to that limit).
+  local work subjects path
+  work=$(mktemp -d)
+  printf '%s\n' "$deployed" >"$work/deployed.json"
+  printf '%s\n' "$main_state" >"$work/main.json"
+  printf '%s\n' "$update" >"$work/update.json"
+  jq -s -f "$TABULARIUM_CVE_JQ" "$work/deployed.json" "$work/main.json" >"$work/deploy.json"
+  jq -s -f "$TABULARIUM_CVE_JQ" "$work/main.json" "$work/update.json" >"$work/update-cmp.json"
 
   subjects='[]'
-  local path
-  for path in $(jq -r '[.[] | select(.status == "scanned") | .toplevel] | unique | .[]' <<<"$states"); do
+  for path in $(jq -sr '[.[] | select(.status == "scanned") | .toplevel] | unique | .[]' \
+    "$work/deployed.json" "$work/main.json" "$work/update.json"); do
     subjects=$(jq -c --arg p "$path" --arg d "$(nar_sha256 "$path" 2>/dev/null || true)" \
       '. + [{name: $p, digest: (if $d == "" then {} else {sha256: $d} end)}]' <<<"$subjects")
   done
 
-  statement=$(jq -n --argjson subjects "$subjects" --argjson states "$states" --argjson comparisons "$comparisons" \
+  local statement
+  statement=$(jq -n --argjson subjects "$subjects" \
+    --slurpfile d "$work/deployed.json" --slurpfile m "$work/main.json" --slurpfile u "$work/update.json" \
+    --slurpfile cd "$work/deploy.json" --slurpfile cu "$work/update-cmp.json" \
     --arg host "$host" --arg repo "$(basename "$PWD")" --arg main "$main" \
     --arg at "${ts:0:4}-${ts:4:2}-${ts:6:2}T${ts:9:2}:${ts:11:2}:${ts:13:2}Z" '{
       "_type": "https://in-toto.io/Statement/v1",
       subject: $subjects,
       predicateType: "https://github.com/gfriloux/tabularium/predicates/cve/v0.1",
       predicate: {host: $host, repository: $repo, generatedAt: $at, mainCommit: $main,
-                  states: $states, comparisons: $comparisons}
+                  states: {deployed: $d[0], main: $m[0], update: $u[0]},
+                  comparisons: {deploy: $cd[0], update: $cu[0]}}
     }')
+  rm -rf "$work"
   printf '%s\n' "$statement" | write_new "$file"
   cve_summary "$file"
 }
@@ -579,23 +586,31 @@ read_export() {
   fi
 }
 
-# Newest exports of the store, as one document for status.jq.
+# Newest exports of the store, as one document for status.jq. Exports are
+# streamed on stdin as (key, document) pairs: they are too large for arguments.
 status_input() {
-  local dir main freshness hosts='{}' host
+  local dir main freshness host
   dir=$(store)
   main=$(git rev-parse -q --verify 'refs/heads/main^{commit}' 2>/dev/null) || main=""
   freshness=$(read_export "$(newest "$dir/freshness")")
-  for host in $({
-    [ ! -d "$dir/deployments" ] || find "$dir/deployments" -mindepth 1 -maxdepth 1 -type d -printf '%f\n'
-    jq -r '.predicate.hosts // {} | keys[]' <<<"$freshness" 2>/dev/null || true
-  } | sort -u); do
-    hosts=$(jq -c --arg h "$host" \
-      --argjson r "$(read_export "$(latest_record "$host")")" \
-      --argjson c "$(read_export "$(newest "$dir/cve/$host")")" \
-      '.[$h] = {record: $r, cve: $c}' <<<"$hosts")
-  done
-  jq -nc --arg main "$main" --argjson f "$freshness" --argjson h "$hosts" \
-    '{main: (if $main == "" then null else $main end), freshness: $f, hosts: $h}'
+  {
+    echo '{"kind":"freshness"}'
+    printf '%s\n' "$freshness"
+    for host in $({
+      [ ! -d "$dir/deployments" ] || find "$dir/deployments" -mindepth 1 -maxdepth 1 -type d -printf '%f\n'
+      jq -r '.predicate.hosts // {} | keys[]' <<<"$freshness" 2>/dev/null || true
+    } | sort -u); do
+      jq -nc --arg h "$host" '{kind: "record", host: $h}'
+      read_export "$(latest_record "$host")"
+      jq -nc --arg h "$host" '{kind: "cve", host: $h}'
+      read_export "$(newest "$dir/cve/$host")"
+    done
+  } | jq -nc --arg main "$main" '
+    [inputs] as $s
+    | reduce range(0; $s | length; 2) as $i
+        ({main: (if $main == "" then null else $main end), freshness: null, hosts: {}};
+         $s[$i] as $k | $s[$i + 1] as $v
+         | if $k.kind == "freshness" then .freshness = $v else .hosts[$k.host][$k.kind] = $v end)'
 }
 
 # Fleet overview, or one host in full, from the stored exports only.

@@ -1,6 +1,6 @@
 # Comparison of two states of a host ($from → $to): CVEs fixed, new and
 # remaining in tiers, kernel counts apart, and bumps of important packages.
-# Run as: jq -n --argjson from <state> --argjson to <state> -f cve.jq
+# Run as: jq -s -f cve.jq <from state file> <to state file>
 
 def key: "\(.id)\u0000\(.package)";
 def entry: {id, package, version, severity};
@@ -10,7 +10,8 @@ def tiers: {solid: map(select(tier == "solid")) | ordered,
             triage: map(select(tier == "triage")) | ordered};
 def kernel: .package == "linux";
 
-if $from.status != "scanned" or $to.status != "scanned" then
+. as [$from, $to]
+| if $from.status != "scanned" or $to.status != "scanned" then
   {status: "unavailable"}
 else
   ($from.cves | map(select(kernel | not))) as $a
