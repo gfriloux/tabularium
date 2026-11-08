@@ -467,7 +467,8 @@ cve_summary() {
   echo "export: $1"
 }
 
-# CVEs a deploy (deployed → main) would fix, and bumps of important packages.
+# CVEs a deploy (deployed → main) and a nixpkgs update (main → update) would
+# fix, and bumps of important packages.
 cve() {
   local host="${1:-}" no_build=false
   [ -n "$host" ] || usage
@@ -512,10 +513,33 @@ cve() {
   main_state=$(cve_state main "git+file://$PWD?rev=$main#$attr.system.build.toplevel" \
     "git+file://$PWD?rev=$main#$attr" "$no_build")
 
+  # main with its root nixpkgs input moved to the head of the branch it follows.
+  local update locked="" branch="" refs head="" nixpkgs
+  IFS=$'\t' read -r _ locked _ branch < <(nixpkgs_inputs "$main" | grep $'^nixpkgs\t') || true
+  nixpkgs=$(jq -nc --arg b "$branch" --arg f "$locked" '{branch: $b, from: $f, to: null}')
+  if [ -z "$locked" ] || [ -z "$branch" ]; then
+    update='{"status":"skipped","reason":"no root nixpkgs input"}'
+  elif ! refs=$(gh_api "repos/NixOS/nixpkgs/git/matching-refs/heads/$branch") ||
+    ! head=$(jq -er --arg r "refs/heads/$branch" '.[] | select(.ref == $r) | .object.sha' <<<"$refs"); then
+    update=$(jq -c --argjson n "$nixpkgs" -n '{status: "skipped", reason: "upstream unavailable", nixpkgs: $n}')
+  else
+    nixpkgs=$(jq -c --arg h "$head" '.to = $h' <<<"$nixpkgs")
+    if [ "$head" = "$locked" ]; then
+      update=$main_state
+    else
+      update=$(cve_state update "git+file://$PWD?rev=$main#$attr.system.build.toplevel" \
+        "git+file://$PWD?rev=$main#$attr" "$no_build" --override-input nixpkgs "github:NixOS/nixpkgs/$head")
+    fi
+    update=$(jq -c --argjson n "$nixpkgs" '. + {nixpkgs: $n}' <<<"$update")
+  fi
+
   local states comparisons subjects statement
-  states=$(jq -nc --argjson d "$deployed" --argjson m "$main_state" '{deployed: $d, main: $m}')
-  comparisons=$(jq -nc --argjson d "$(jq -n --argjson from "$deployed" --argjson to "$main_state" -f "$TABULARIUM_CVE_JQ")" \
-    '{deploy: $d}')
+  states=$(jq -nc --argjson d "$deployed" --argjson m "$main_state" --argjson u "$update" \
+    '{deployed: $d, main: $m, update: $u}')
+  comparisons=$(jq -nc \
+    --argjson d "$(jq -n --argjson from "$deployed" --argjson to "$main_state" -f "$TABULARIUM_CVE_JQ")" \
+    --argjson u "$(jq -n --argjson from "$main_state" --argjson to "$update" -f "$TABULARIUM_CVE_JQ")" \
+    '{deploy: $d, update: $u}')
 
   subjects='[]'
   local path

@@ -1,9 +1,11 @@
 {pkgs}: let
   inherit (import ./lib.nix {inherit pkgs;}) mkTest;
   A = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  B = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
   # Toplevel basenames: deployed (the fake's default) and main.
   D = "00000000000000000000000000000000-nixos-system-clochette";
   M = "22222222222222222222222222222222-nixos-system-clochette";
+  U = "33333333333333333333333333333333-nixos-system-clochette";
   # A repository with a flake.lock on main, fixtures under $TMPDIR, then `script`.
   mkCve = name: script:
     mkTest name ''
@@ -23,6 +25,13 @@
       patched() { echo "INFO     $2 for '$3' is patched with: ['/nix/store/x-$2.patch']" >>$FAKE_VULNX/$1.log; }
       important() { echo "$2" >$FAKE_NIX_IMPORTANT/$1.json; }
       main_at() { echo "/nix/store/$2" >$FAKE_NIX_TOPLEVELS/$1; }
+      # upstream <sha>: head of nixos-unstable on (fake) GitHub.
+      upstream() {
+        export FAKE_GH=$TMPDIR/gh
+        mkdir -p $FAKE_GH/repos/NixOS/nixpkgs/git/matching-refs/heads
+        printf '[{"ref":"refs/heads/nixos-unstable","object":{"sha":"%s","type":"commit"}}]' "$1" \
+          >$FAKE_GH/repos/NixOS/nixpkgs/git/matching-refs/heads/nixos-unstable
+      }
       lock nixpkgs ${A} 1000000 nixos-unstable
       git add flake.lock && git commit -qm lock
       ${script}
@@ -128,5 +137,54 @@ in {
     set -e
     test "$a" -eq 64
     test "$b" -eq 64
+  '';
+
+  cve_update_diff = mkCve "cve-update-diff" ''
+    ${deployedThenMain}
+    upstream ${B}
+    echo /nix/store/${U} >$FAKE_NIX_TOPLEVELS/update
+    vulnx ${D}
+    vulnx ${M} '"CVE-2026-1","u","bind","9.20.29",8.1,1,0,1,2'
+    vulnx ${U}
+    tabularium cve clochette >stdout
+    jq -e '
+      .predicate.comparisons.update.fixed.solid[0].package == "bind"
+      and .predicate.states.update.nixpkgs == {branch: "nixos-unstable", from: "${A}", to: "${B}"}
+    ' $export_file
+    grep -q '^main → update: fixed 1 ' stdout
+  '';
+
+  cve_update_up_to_date = mkCve "cve-update-up-to-date" ''
+    ${deployedThenMain}
+    upstream ${A}
+    vulnx ${D}
+    vulnx ${M}
+    tabularium cve clochette >stdout
+    jq -e '.predicate.states.update.toplevel == .predicate.states.main.toplevel' $export_file
+    test "$(wc -l <$TMPDIR/vulnxscan.log)" -eq 2
+  '';
+
+  cve_offline = mkCve "cve-offline" ''
+    ${deployedThenMain}
+    vulnx ${D}
+    vulnx ${M}
+    tabularium cve clochette >stdout
+    jq -e '
+      .predicate.states.update.status == "skipped"
+      and .predicate.states.update.reason == "upstream unavailable"
+      and .predicate.comparisons.deploy.status != "unavailable"
+    ' $export_file
+  '';
+
+  cve_scan_fails = mkCve "cve-scan-fails" ''
+    ${deployedThenMain}
+    upstream ${A}
+    vulnx ${D}
+    tabularium cve clochette >stdout
+    jq -e '
+      .predicate.states.main.status == "failed"
+      and .predicate.comparisons.deploy == {status: "unavailable"}
+      and .predicate.comparisons.update == {status: "unavailable"}
+    ' $export_file
   '';
 }

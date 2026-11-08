@@ -106,7 +106,7 @@
   '';
   tabularium = pkgs.writeShellApplication {
     name = "tabularium";
-    runtimeInputs = with pkgs; [git jq coreutils miller fakeNix fakeCurl fakeVulnxscan];
+    runtimeInputs = with pkgs; [git jq coreutils gnugrep gnused miller fakeNix fakeCurl fakeVulnxscan];
     runtimeEnv = {
       TABULARIUM_SBOM_NIX = "/fake/sbom.nix";
       TABULARIUM_BOMBON = "/fake/bombon";
