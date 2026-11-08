@@ -33,13 +33,15 @@
         jq -n --arg at "$(iso $1)" --arg m "$2" --argjson h "$3" --argjson i "''${4:-$inputs0}" \
           '{predicate: {repository: "nixos", generatedAt: $at, mainCommit: $m, inputs: $i, hosts: $h}}' >$st/freshness/$1.json
       }
-      # cvex <host> <ts> <main> <deployed toplevel> <deploy comparison> [<update comparison>]: a cve export.
+      # cvex <host> <ts> <main> <deployed toplevel> <deploy comparison> [<update comparison>]: a cve export;
+      # $states_extra is merged into its states.
       cvex() {
         mkdir -p $st/cve/$1
         jq -n --arg h "$1" --arg at "$(iso $2)" --arg m "$3" --arg t "$4" --argjson d "$5" --argjson u "''${6:-$update0}" '{
           predicateType: "https://github.com/gfriloux/tabularium/predicates/cve/v0.1",
           predicate: {host: $h, generatedAt: $at, mainCommit: $m,
-            states: {deployed: {status: "scanned", toplevel: $t}, main: {status: "scanned"}, update: {status: "scanned"}},
+            states: ({deployed: {status: "scanned", toplevel: $t}, main: {status: "scanned"}, update: {status: "scanned"}}
+              + ($ENV.states_extra // "{}" | fromjson)),
             comparisons: {deploy: $d, update: $u}}}' >$st/cve/$1/$2.json
       }
       inputs0='{"nixpkgs":{"branch":"nixos-unstable","upstream":{"status":"up-to-date","days":0,"commits":0}}}'
@@ -153,5 +155,43 @@ in {
     code=$?
     set -e
     test "$code" -eq 64
+  '';
+
+  status_host = mkStatus "status-host" ''
+    ${skitarii}
+    tabularium status skitarii >stdout
+    cat stdout
+    grep -qx 'skitarii' stdout
+    grep -Eq '^  deployed +2026-11-07 \(commit 653ca74, nixpkgs 2026-10-20\)$' stdout
+    grep -Eq '^  behind main +15 d, 11301 c$' stdout
+    grep -Eq '^deployed → main: fixed 6 \(solid 0, triage 5, patch 1\), new 0, remaining 0, kernel 193 → 193$' stdout
+    grep -qx '  fixed, triage:' stdout
+    test "$(grep -Ec '^    [0-9.]+  CVE-' stdout)" -eq 6
+    grep -qx '  linux 6.18.57 → 6.18.60' stdout
+    grep -Eq '^main → update: ' stdout
+  '';
+
+  status_host_unavailable = mkStatus "status-host-unavailable" ''
+    rec skitarii 20261107T213427Z ${C} ${S}
+    export states_extra='{"update":{"status":"skipped","reason":"upstream unavailable"}}'
+    cvex skitarii 20261108T102706Z "$main" ${S} ${pkgs.lib.escapeShellArg deploy6} '{"status":"unavailable"}'
+    tabularium status skitarii >stdout
+    grep -qx 'main → update: unavailable (update: upstream unavailable)' stdout
+  '';
+
+  status_host_not_scanned = mkStatus "status-host-not-scanned" ''
+    rec clochette 20261107T213427Z ${C} /nix/store/00000000000000000000000000000000-nixos-system-clochette
+    tabularium status clochette >stdout
+    grep -qx 'no CVE scan (tabularium cve clochette)' stdout
+  '';
+
+  status_host_unknown = mkStatus "status-host-unknown" ''
+    ${skitarii}
+    set +e
+    tabularium status nope 2>err
+    code=$?
+    set -e
+    test "$code" -eq 1
+    grep -q 'no deployment recorded for nope' err
   '';
 }

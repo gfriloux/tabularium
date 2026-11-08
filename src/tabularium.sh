@@ -459,24 +459,7 @@ cve_state() {
 }
 
 cve_summary() {
-  jq -r '
-    def line($label):
-      if .status == "unavailable" then "\($label): unavailable (\(.why))"
-      else "\($label): fixed \([.fixed[] | length] | add) (solid \(.fixed.solid | length), triage \(.fixed.triage | length), patch \(.fixed.patch | length)), new \(.new.solid + .new.triage | length), remaining \(.remaining.solid + .remaining.triage | length), kernel \(.kernel.from) → \(.kernel.to)"
-        + (if .status == "degraded" then " [degraded: \(.missingSources | join(", "))]" else "" end)
-      end;
-    .predicate as $p
-    | [["deploy", "deployed", "main"], ["update", "main", "update"]][]
-    | . as [$c, $from, $to]
-    | select($p.comparisons[$c])
-    | $p.comparisons[$c]
-      + {why: ([$from, $to] | map(select($p.states[.].status != "scanned") | "\(.): \($p.states[.].reason)") | join(", "))}
-    | line("\($from) → \($to)"),
-      (select(.status != "unavailable")
-        | if .bumps == null then "bumps \($from) → \($to): unknown"
-          elif .bumps == [] then "bumps \($from) → \($to): none"
-          else "bumps \($from) → \($to):", (.bumps[] | "  \(.name) \(.from) → \(.to)") end)
-  ' "$1"
+  jq -r -L "$TABULARIUM_JQ" 'include "report"; .predicate | comparison_lines(.states; .comparisons; false)' "$1"
   echo
   echo "export: $1"
 }

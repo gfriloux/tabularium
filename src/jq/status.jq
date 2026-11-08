@@ -1,6 +1,8 @@
 # Fleet status from the stored exports. Input: status_input's document.
 # Run as: jq -r -L <src/jq> --arg host <name or ""> -f status.jq
 
+include "report";
+
 def day: if . == null then null else .[0:10] end;
 def minute: if . == null then null else .[0:10] + " " + .[11:16] end;
 def table: (transpose | map(map(length) | max + 2)) as $w
@@ -73,5 +75,14 @@ if $host == "" then
     | "", "\($name), fixed by deploy:", (.[0:5][] | cve_line),
       (if length > 5 then "  … \(length - 5) more (tabularium status \($name))" else empty end))
 else
-  empty
+  facts($host) as $x
+  | ($x | row) as [$_, $deployed, $nixpkgs, $behind, $_, $_, $scanned]
+  | $host,
+    "  deployed     \($deployed) (commit \($x.record.gitCommit[0:7]), nixpkgs \($nixpkgs))",
+    "  behind main  \($behind)",
+    "  scanned      \($scanned)",
+    "",
+    (if $x.cve == null then "no CVE scan (tabularium cve \($host))"
+     elif $x.stale then "CVE scan predates the last deploy (tabularium cve \($host))"
+     else comparison_lines($x.cve.states; $x.cve.comparisons; true) end)
 end
