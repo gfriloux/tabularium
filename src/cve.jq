@@ -18,20 +18,26 @@ else
   | ($b | map(key)) as $bkeys
   | ($a | map(key)) as $akeys
   | ($to.patched | map(key)) as $patched
-  | ($a | map(select(key as $k | $bkeys | index($k) | not))) as $gone
   | (($from.sources - $to.sources) + ($to.sources - $from.sources) | unique) as $missing
-  | ($from.important | map({key: .name, value: .version}) | from_entries) as $before
+  # Seen only by a source missing on one side: its absence on that side means nothing.
+  | def certain: (.sources - $missing) != [];
+    ($a | map(select(key as $k | $bkeys | index($k) | not))) as $gone_all
+  | ($b | map(select(key as $k | $akeys | index($k) | not))) as $new_all
+  | ($gone_all | map(select(certain))) as $gone
+  | (($from.important // []) | map({key: .name, value: .version}) | from_entries) as $before
   | {
       status: (if $missing == [] and ($from.warnings // []) + ($to.warnings // []) == []
                then "ok" else "degraded" end),
       missingSources: $missing,
       fixed: (($gone | map(select(key as $k | $patched | index($k) | not)) | tiers)
               + {patch: ($gone | map(select(key as $k | $patched | index($k))) | ordered)}),
-      new: ($b | map(select(key as $k | $akeys | index($k) | not)) | tiers),
+      new: ($new_all | map(select(certain)) | tiers),
+      uncertain: ($gone_all + $new_all | map(select(certain | not)) | ordered),
       remaining: ($b | map(select(key as $k | $akeys | index($k))) | tiers),
       kernel: {from: ($from.cves | map(select(kernel)) | length),
                to: ($to.cves | map(select(kernel)) | length)},
-      bumps: [$to.important[] | select($before[.name] != null and $before[.name] != .version)
-              | {name, from: $before[.name], to: .version}] | sort_by(.name)
+      bumps: (if $from.important == null or $to.important == null then null
+              else [$to.important[] | select($before[.name] != null and $before[.name] != .version)
+                    | {name, from: $before[.name], to: .version}] | sort_by(.name) end)
     }
 end

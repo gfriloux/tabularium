@@ -187,4 +187,28 @@ in {
       and .predicate.comparisons.update == {status: "unavailable"}
     ' $export_file
   '';
+
+  # A dirty record leaves the deployed config unknown: bumps are unknown, not "none".
+  cve_bumps_unknown = mkCve "cve-bumps-unknown" ''
+    echo changed > flake.nix
+    tabularium record clochette --allow-dirty -- true
+    git checkout -q flake.nix
+    git commit -q --allow-empty -m next
+    main_at "$(git rev-parse main)" ${M}
+    vulnx ${D}
+    vulnx ${M}
+    important ${M} '[{"name":"bind","version":"9.20.31"}]'
+    tabularium cve clochette >stdout
+    jq -e '.predicate.comparisons.deploy.bumps == null' $export_file
+    grep -qx 'bumps deployed → main: unknown' stdout
+  '';
+
+  # An unreadable vulnxscan report fails that state; the export is still written.
+  cve_unreadable_report = mkCve "cve-unreadable-report" ''
+    ${deployedThenMain}
+    vulnx ${D}
+    printf '"vuln_id","package"\n"a","b","c"\n' >$FAKE_VULNX/${M}.csv
+    tabularium cve clochette >stdout
+    jq -e '.predicate.states.main.status == "failed"' $export_file
+  '';
 }

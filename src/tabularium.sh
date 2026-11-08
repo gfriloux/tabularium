@@ -25,7 +25,8 @@ store() {
 # sha256 (hex) of the NAR of a valid store path.
 nar_sha256() {
   local nar_hash
-  nar_hash=$(nix path-info --json --json-format 2 "$1" | jq -r --arg p "${1#/nix/store/}" '.info[$p].narHash')
+  nar_hash=$(nix path-info --json --json-format 2 "$1" | jq -r --arg p "${1#/nix/store/}" '.info[$p].narHash') || return 1
+  [[ $nar_hash == sha256-* ]] || return 1
   printf '%s' "${nar_hash#sha256-}" | base64 -d | od -An -tx1 | tr -d ' \n'
 }
 
@@ -95,7 +96,10 @@ record() {
   fi
 
   local sha256
-  sha256=$(nar_sha256 "$out_path")
+  if ! sha256=$(nar_sha256 "$out_path"); then
+    echo "tabularium: cannot read the NAR hash of $out_path (not in the local store?); not recorded" >&2
+    exit 1
+  fi
 
   local json
   json=$(jq -n \
@@ -392,7 +396,7 @@ sbom() {
 # realise, <config> the installable of its NixOS system (or "" when unknown).
 # Prints a state JSON; build and scan problems become "skipped" or "failed".
 cve_state() {
-  local name=$1 target=$2 config=$3 no_build=$4 n path dir code important='[]'
+  local name=$1 target=$2 config=$3 no_build=$4 n path dir code state important=null
   shift 4
   if [[ $target != /nix/store/* ]]; then
     n=$(nix build --dry-run "$target" "$@" 2>&1 >/dev/null |
@@ -413,7 +417,7 @@ cve_state() {
     path=$target
   fi
   if [ -n "$config" ]; then
-    important=$(nix eval --json --impure "$config" "$@" --apply "import $TABULARIUM_IMPORTANT_NIX") || important='[]'
+    important=$(nix eval --json --impure "$config" "$@" --apply "import $TABULARIUM_IMPORTANT_NIX") || important=null
   fi
 
   dir=$(mktemp -d)
@@ -430,7 +434,7 @@ cve_state() {
   sed -nE "s/^[A-Z]+ +([^ ]+) for '([^']+)' is patched with:.*/\1\t\2/p" "$dir/log" |
     jq -Rn '[inputs | split("\t") | {id: .[0], package: .[1]}] | unique' >"$dir/patched.json"
   # mlr prints nothing at all for a CSV without rows.
-  { mlr --icsv --ojson cat "$dir/vulns.csv"; echo; } | jq -sc 'add // []' | jq -c \
+  if ! state=$({ mlr --icsv --ojson cat "$dir/vulns.csv" && echo; } | jq -sc 'add // []' | jq -c \
     --arg p "$path" --argjson important "$important" --slurpfile patched "$dir/patched.json" \
     --slurpfile warnings "$dir/warnings.json" '
     [.[] | {id: .vuln_id, package: (.package | tostring), version: (.version_local | tostring),
@@ -441,8 +445,11 @@ cve_state() {
     | {status: "scanned", toplevel: $p,
        sources: [$all[] | . as $s | select($warnings[0] | map(ascii_downcase | contains($s)) | any | not)],
        warnings: ($warnings[0] | map(select(. as $w | $all | map(. as $s | $w | ascii_downcase | contains($s)) | any | not))),
-       cves: $cves, patched: $patched[0], important: $important}'
+       cves: $cves, patched: $patched[0], important: $important}'); then
+    state=$(jq -nc --arg p "$path" '{status: "failed", toplevel: $p, reason: "unreadable vulnxscan report"}')
+  fi
   rm -rf "$dir"
+  printf '%s\n' "$state"
 }
 
 cve_summary() {
@@ -460,7 +467,8 @@ cve_summary() {
       + {why: ([$from, $to] | map(select($p.states[.].status != "scanned") | "\(.): \($p.states[.].reason)") | join(", "))}
     | line("\($from) → \($to)"),
       (select(.status != "unavailable")
-        | if .bumps == [] then "bumps \($from) → \($to): none"
+        | if .bumps == null then "bumps \($from) → \($to): unknown"
+          elif .bumps == [] then "bumps \($from) → \($to): none"
           else "bumps \($from) → \($to):", (.bumps[] | "  \(.name) \(.from) → \(.to)") end)
   ' "$1"
   echo

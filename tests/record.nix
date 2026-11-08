@@ -123,4 +123,14 @@ in {
     test "$a" -eq 64 && test "$b" -eq 64 && test "$c" -eq 64
     test "$(records)" -eq 0
   '';
+
+  # The toplevel is not in the local store (built elsewhere): no digest, no record.
+  record_path_info_fails = mkTest "record-path-info-fails" ''
+    set +e
+    FAKE_NIX_MISSING=1 tabularium record clochette -- true 2>err
+    code=$?
+    set -e
+    test "$code" -ne 0
+    test "$(records)" -eq 0
+  '';
 }
