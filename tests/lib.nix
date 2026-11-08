@@ -41,16 +41,16 @@
             # nix eval --json <ref>#nixosConfigurations --apply builtins.attrNames
             echo '["RogueLeader","clochette","exampleHost","skitarii"]'
             ;;
-          *.config)
-            # nix eval --json <ref>#nixosConfigurations.<host>.config --apply <important.nix>
-            known_host
-            f=''${FAKE_NIX_IMPORTANT:-/nonexistent}/$(basename "$(toplevel)").json
-            if [ -f "$f" ]; then cat "$f"; else echo '[]'; fi
-            ;;
-          *)
+          *.outPath)
             # nix eval --raw <ref>#nixosConfigurations.<host>.config.system.build.toplevel.outPath
             known_host
             toplevel
+            ;;
+          *)
+            # nix eval --json <ref>#nixosConfigurations.<host> --apply <important.nix>
+            known_host
+            f=''${FAKE_NIX_IMPORTANT:-/nonexistent}/$(basename "$(toplevel)").json
+            if [ -f "$f" ]; then cat "$f"; else echo '[]'; fi
             ;;
         esac
         ;;

@@ -1,7 +1,11 @@
 # Packages the owner chose: listed ones, those of enabled services, programs
-# and virtualisation, and the kernel. Applied to a NixOS `config`; anything
-# that throws while evaluating is dropped rather than failing the whole list.
-config: let
+# and virtualisation, and the kernel. Applied to a NixOS system ({ config,
+# options, … }); anything that throws while evaluating is dropped rather than
+# failing the whole list.
+system: let
+  inherit (system) config;
+  options = system.options or {};
+
   try = v: let
     r = builtins.tryEval v;
   in
@@ -19,6 +23,9 @@ config: let
     then {inherit name version;}
     else null;
 
+  # Renamed options abort when read, which tryEval cannot catch; they are invisible.
+  renamed = ns: n: try (options.${ns}.${n}.enable.visible or true) == false;
+
   # Packages of the enabled modules of one namespace (services, programs…).
   enabled = ns: let
     modules = try (config.${ns} or {});
@@ -28,7 +35,7 @@ config: let
       builtins.concatMap (n: let
         m = try modules.${n};
       in
-        if builtins.isAttrs m && try (m.enable or false) == true
+        if !renamed ns n && builtins.isAttrs m && try (m.enable or false) == true
         then [(try (m.package or null))]
         else []) (builtins.attrNames modules)
     else [];
@@ -39,8 +46,17 @@ config: let
     then builtins.concatMap (u: try (users.${u}.home.packages or [])) (builtins.attrNames users)
     else [];
 
+  # NixOS adds its own base packages to systemPackages; only the owner's count.
+  base = map (p: try (describe p)) ((try (config.environment.corePackages or [])) ++ (try (config.environment.defaultPackages or [])));
+  baseNames = map (d: d.name) (builtins.filter (d: d != null) base);
+  listed = builtins.filter (p: let
+    d = try (describe p);
+  in
+    d == null || !builtins.elem d.name baseNames)
+  (try (config.environment.systemPackages or []));
+
   candidates =
-    (try (config.environment.systemPackages or []))
+    listed
     ++ homePackages
     ++ enabled "services"
     ++ enabled "programs"

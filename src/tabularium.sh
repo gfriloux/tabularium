@@ -389,7 +389,7 @@ sbom() {
 }
 
 # One state of a host, scanned: <toplevel> is a store path or an installable to
-# realise, <config> the installable of its NixOS config (or "" when unknown).
+# realise, <config> the installable of its NixOS system (or "" when unknown).
 # Prints a state JSON; build and scan problems become "skipped" or "failed".
 cve_state() {
   local name=$1 target=$2 config=$3 no_build=$4 n path dir code important='[]'
@@ -493,7 +493,7 @@ cve() {
     exit 1
   fi
 
-  local ts file attr="nixosConfigurations.$host.config"
+  local ts file attr="nixosConfigurations.$host"
   ts="${TABULARIUM_NOW:-$(date -u +%Y%m%dT%H%M%SZ)}"
   file="$(store)/cve/$host/$ts.json"
 
@@ -504,13 +504,13 @@ cve() {
   if nix path-info --json --json-format 2 "$subject" >/dev/null 2>&1; then
     deployed=$(cve_state deployed "$subject" "$deployed_config" "$no_build")
   elif [ "$dirty" = false ]; then
-    deployed=$(cve_state deployed "$deployed_config.system.build.toplevel" "$deployed_config" "$no_build")
+    deployed=$(cve_state deployed "$deployed_config.config.system.build.toplevel" "$deployed_config" "$no_build")
   else
     deployed='{"status":"skipped","reason":"dirty record, toplevel not in the local store"}'
   fi
 
   local main_state
-  main_state=$(cve_state main "git+file://$PWD?rev=$main#$attr.system.build.toplevel" \
+  main_state=$(cve_state main "git+file://$PWD?rev=$main#$attr.config.system.build.toplevel" \
     "git+file://$PWD?rev=$main#$attr" "$no_build")
 
   # main with its root nixpkgs input moved to the head of the branch it follows.
@@ -527,7 +527,7 @@ cve() {
     if [ "$head" = "$locked" ]; then
       update=$main_state
     else
-      update=$(cve_state update "git+file://$PWD?rev=$main#$attr.system.build.toplevel" \
+      update=$(cve_state update "git+file://$PWD?rev=$main#$attr.config.system.build.toplevel" \
         "git+file://$PWD?rev=$main#$attr" "$no_build" --override-input nixpkgs "github:NixOS/nixpkgs/$head")
     fi
     update=$(jq -c --argjson n "$nixpkgs" '. + {nixpkgs: $n}' <<<"$update")

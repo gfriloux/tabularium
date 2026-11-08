@@ -72,10 +72,11 @@
       version = "1.104.5";
     }
   ];
-  # Compares the JSON of `important config` with the expected list.
-  check = name: config: expected:
+  # Compares the JSON of `important { config, options }` with the expected list.
+  check = name: config: expected: checkWith name config {} expected;
+  checkWith = name: config: options: expected:
     pkgs.runCommand "tabularium-${name}" {
-      got = builtins.toJSON (important config);
+      got = builtins.toJSON (important {inherit config options;});
       want = builtins.toJSON expected;
     } ''
       [ "$got" = "$want" ] || { echo "got:  $got" >&2; echo "want: $want" >&2; exit 1; }
@@ -101,4 +102,47 @@ in {
   important_no_home_manager =
     check "important-no-home-manager" (removeAttrs base ["home-manager"])
     (builtins.filter (p: p.name != "ripgrep") all);
+
+  # A renamed option aborts when read (`mkRenamedOptionModule`); its option is invisible.
+  important_renamed_option = checkWith "important-renamed-option" (base
+    // {
+      services =
+        base.services
+        // {
+          frp.enable = abort "Renaming error";
+        };
+    }) {services.frp.enable.visible = false;}
+  all;
+
+  # NixOS puts its own base packages in systemPackages; they are not the owner's.
+  important_core_excluded = check "important-core-excluded" (base
+    // {
+      environment = {
+        systemPackages =
+          base.environment.systemPackages
+          ++ [
+            {
+              pname = "acl";
+              version = "2.4.0";
+            }
+            {
+              pname = "nano";
+              version = "8.6";
+            }
+          ];
+        corePackages = [
+          {
+            pname = "acl";
+            version = "2.4.0";
+          }
+        ];
+        defaultPackages = [
+          {
+            pname = "nano";
+            version = "8.6";
+          }
+        ];
+      };
+    })
+  all;
 }
