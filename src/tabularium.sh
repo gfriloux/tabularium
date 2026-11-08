@@ -6,6 +6,7 @@ usage() {
 usage: tabularium record <host> [--allow-dirty] -- <command...>
        tabularium last <host>
        tabularium freshness
+       tabularium sbom <host> [--build]
 USAGE
   exit 64
 }
@@ -297,6 +298,39 @@ freshness() {
   echo "export: $file"
 }
 
+sbom_summary() {
+  jq -r '.components // [] | (map(.purl // "" | select(. != "")) | length) as $purl
+    | (map(.cpe // "" | select(. != "")) | length) as $cpe
+    | (map(.licenses // [] | select(length > 0)) | length) as $licenses
+    | "components: \(length)", "purl: \($purl)", "cpe: \($cpe)", "licenses: \($licenses)"' "$1"
+  echo
+  echo "export: $1"
+}
+
+# CycloneDX SBOM (bombon) of the toplevel <host> was last deployed with.
+sbom() {
+  local host="${1:-}"
+  [ -n "$host" ] || usage
+  shift
+  if [ "${1:-}" = "--build" ]; then
+    shift
+  fi
+  [ "$#" -eq 0 ] || usage
+
+  cd "$(git rev-parse --show-toplevel)"
+
+  local latest commit file bom
+  latest=$(latest_record "$host")
+  commit=$(jq -r '.predicate.gitCommit' "$latest")
+  file="$(store)/sbom/$host/$commit.cdx.json"
+
+  bom=$(nix build --no-link --print-out-paths --impure --file "$TABULARIUM_SBOM_NIX" \
+    --argstr repo "$PWD" --argstr rev "$commit" --argstr host "$host" \
+    --argstr nixpkgs "$TABULARIUM_NIXPKGS" --argstr bombon "$TABULARIUM_BOMBON")
+  write_new "$file" <"$bom"
+  sbom_summary "$file"
+}
+
 case "${1:-}" in
   last)
     shift
@@ -309,6 +343,10 @@ case "${1:-}" in
   freshness)
     shift
     freshness "$@"
+    ;;
+  sbom)
+    shift
+    sbom "$@"
     ;;
   *) usage ;;
 esac
