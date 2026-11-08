@@ -20,3 +20,4 @@
 // import ../tests/important.nix {inherit pkgs;}
 // import ../tests/cve-diff.nix {inherit pkgs;}
 // import ../tests/cve.nix {inherit pkgs;}
+// import ../tests/status.nix {inherit pkgs;}

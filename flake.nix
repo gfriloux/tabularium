@@ -28,13 +28,14 @@
     pkgs = nixpkgs.legacyPackages.${system};
     tabularium = pkgs.writeShellApplication {
       name = "tabularium";
-      runtimeInputs = with pkgs; [git jq nix coreutils gnugrep gnused curl miller sbomnix.packages.${system}.default];
+      runtimeInputs = with pkgs; [git jq nix coreutils findutils gnugrep gnused curl miller sbomnix.packages.${system}.default];
       runtimeEnv = {
         TABULARIUM_SBOM_NIX = "${./src/sbom.nix}";
         TABULARIUM_BOMBON = "${bombon}";
         TABULARIUM_NIXPKGS = "${nixpkgs}";
         TABULARIUM_IMPORTANT_NIX = "${./src/important.nix}";
         TABULARIUM_CVE_JQ = "${./src/cve.jq}";
+        TABULARIUM_JQ = "${./src/jq}";
       };
       text = builtins.readFile ./src/tabularium.sh;
     };

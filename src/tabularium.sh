@@ -8,6 +8,7 @@ usage: tabularium record <host> [--allow-dirty] -- <command...>
        tabularium freshness
        tabularium sbom <host> [--build]
        tabularium cve <host> [--no-build] [--osv]
+       tabularium status [<host>]
 USAGE
   exit 64
 }
@@ -579,6 +580,58 @@ cve() {
   cve_summary "$file"
 }
 
+# Newest *.json of a directory, or nothing.
+newest() {
+  [ -d "$1" ] || return 0
+  find "$1" -maxdepth 1 -name '*.json' | sort | tail -n 1
+}
+
+# A JSON file, or null (with a warning) when it cannot be read.
+read_export() {
+  if [ -z "$1" ]; then
+    echo null
+  elif ! jq -ce . "$1" 2>/dev/null; then
+    echo "tabularium: $1 is unreadable, skipped" >&2
+    echo null
+  fi
+}
+
+# Newest exports of the store, as one document for status.jq.
+status_input() {
+  local dir main freshness hosts='{}' host
+  dir=$(store)
+  main=$(git rev-parse -q --verify 'refs/heads/main^{commit}' 2>/dev/null) || main=""
+  freshness=$(read_export "$(newest "$dir/freshness")")
+  for host in $({
+    [ ! -d "$dir/deployments" ] || find "$dir/deployments" -mindepth 1 -maxdepth 1 -type d -printf '%f\n'
+    jq -r '.predicate.hosts // {} | keys[]' <<<"$freshness" 2>/dev/null || true
+  } | sort -u); do
+    hosts=$(jq -c --arg h "$host" \
+      --argjson r "$(read_export "$(latest_record "$host")")" \
+      --argjson c "$(read_export "$(newest "$dir/cve/$host")")" \
+      '.[$h] = {record: $r, cve: $c}' <<<"$hosts")
+  done
+  jq -nc --arg main "$main" --argjson f "$freshness" --argjson h "$hosts" \
+    '{main: (if $main == "" then null else $main end), freshness: $f, hosts: $h}'
+}
+
+# Fleet overview, or one host in full, from the stored exports only.
+status() {
+  [ "$#" -le 1 ] || usage
+  local host="${1:-}" input
+  cd "$(git rev-parse --show-toplevel)"
+  input=$(status_input)
+  if jq -e '.hosts == {} and .freshness == null' <<<"$input" >/dev/null; then
+    echo "tabularium: nothing recorded yet" >&2
+    exit 1
+  fi
+  if [ -n "$host" ] && ! jq -e --arg h "$host" '.hosts[$h].record != null' <<<"$input" >/dev/null; then
+    echo "tabularium: no deployment recorded for $host" >&2
+    exit 1
+  fi
+  jq -r -L "$TABULARIUM_JQ" --arg host "$host" -f "$TABULARIUM_JQ/status.jq" <<<"$input"
+}
+
 case "${1:-}" in
   last)
     shift
@@ -599,6 +652,10 @@ case "${1:-}" in
   cve)
     shift
     cve "$@"
+    ;;
+  status)
+    shift
+    status "$@"
     ;;
   *) usage ;;
 esac
