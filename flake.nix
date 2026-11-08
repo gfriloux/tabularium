@@ -7,18 +7,28 @@
       url = "github:gfriloux/stc";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    bombon = {
+      url = "github:nikstur/bombon";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs = {
     self,
     nixpkgs,
     stc,
+    bombon,
   }: let
     system = "x86_64-linux";
     pkgs = nixpkgs.legacyPackages.${system};
     tabularium = pkgs.writeShellApplication {
       name = "tabularium";
       runtimeInputs = with pkgs; [git jq nix coreutils curl];
+      runtimeEnv = {
+        TABULARIUM_SBOM_NIX = "${./src/sbom.nix}";
+        TABULARIUM_BOMBON = "${bombon}";
+        TABULARIUM_NIXPKGS = "${nixpkgs}";
+      };
       text = builtins.readFile ./src/tabularium.sh;
     };
   in {

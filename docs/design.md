@@ -140,8 +140,9 @@ Consequences (designer's notes):
 
 Known limits to plan around: CVE matching on Nix packages relies on CPE and
 name heuristics (false positives, nixpkgs backports patches without bumping
-versions); `pkg:nix` is not a registered PURL type (purl-spec #876), so
-upstream PURLs are used; OSV has no Nix ecosystem.
+versions); `pkg:nix` is not a registered PURL type (purl-spec #876), yet
+bombon emits `pkg:nix/<name>@<version>` (1518/1519 components on exampleHost,
+2026-11-08) and CPE on 40/1519 only; OSV has no Nix ecosystem.
 
 ## Constraints
 
@@ -169,7 +170,9 @@ Each lot is usable on its own.
 2. **First analysis: freshness.** Cheapest analysis (reads `flake.lock`), gives
    a first drift report (deployed commit vs `main`). **Done** (2026-11-07),
    see [spec](superpowers/specs/2026-11-07-lot2-freshness-design.md).
-3. **SBOMs.** Host closures and container images, CycloneDX.
+3. **SBOMs.** Host closures, CycloneDX (bombon). **Done** (2026-11-08), see
+   [spec](superpowers/specs/2026-11-08-lot3-sbom-design.md). Container images
+   postponed: `nixos` pins them by tag without digest.
 4. **CVE + VEX.** grype over the SBOMs, OpenVEX statements.
 5. **Compliance.** Consume stc#146 output per host.
 6. **Viewer** (separate design).
