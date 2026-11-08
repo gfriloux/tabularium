@@ -22,7 +22,8 @@ else
   | (($from.sources - $to.sources) + ($to.sources - $from.sources) | unique) as $missing
   | ($from.important | map({key: .name, value: .version}) | from_entries) as $before
   | {
-      status: (if $missing == [] then "ok" else "degraded" end),
+      status: (if $missing == [] and ($from.warnings // []) + ($to.warnings // []) == []
+               then "ok" else "degraded" end),
       missingSources: $missing,
       fixed: (($gone | map(select(key as $k | $patched | index($k) | not)) | tiers)
               + {patch: ($gone | map(select(key as $k | $patched | index($k))) | ordered)}),
